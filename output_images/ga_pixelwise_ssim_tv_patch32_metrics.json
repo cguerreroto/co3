@@ -1,0 +1,51 @@
+{
+  "method": "pixel-wise genetic algorithm with SSIM objective and TV regularization",
+  "input_images": {
+    "noisy_image": "output_images\\noisy_image.png",
+    "clean_image": "output_images\\clean_image.png"
+  },
+  "image_shape": [
+    512,
+    512
+  ],
+  "patch_size": 32,
+  "ga_parameters": {
+    "population_size": 12,
+    "n_generations": 15,
+    "elite_size": 2,
+    "tournament_size": 3,
+    "mutation_rate": 0.03,
+    "mutation_std": 0.03,
+    "lambda_tv": 5,
+    "seed": 42
+  },
+  "optimization_summary": {
+    "n_patches": 256,
+    "patch_size": 32,
+    "avg_patch_fitness": -0.08181737431687451,
+    "std_patch_fitness": 0.142088124745384,
+    "avg_patch_ssim_to_noisy": 0.9914795924043563,
+    "std_patch_ssim_to_noisy": 0.0033535146178962335,
+    "avg_patch_tv": 0.21465939334424616,
+    "std_patch_tv": 0.028909547554112184,
+    "total_evaluations": 46080
+  },
+  "no_reference_diagnostics": {
+    "ssim_denoised_vs_noisy": 0.9912508331984768,
+    "tv_noisy_global": 0.22684384514303768,
+    "tv_denoised_global": 0.22135228646400623
+  },
+  "reference_comparison": {
+    "ssim_noisy_vs_clean": 0.2962341433367481,
+    "psnr_noisy_vs_clean": 20.406742684901104,
+    "mse_noisy_vs_clean": 0.009105959858907183,
+    "ssim_denoised_vs_clean": 0.2995379852254591,
+    "psnr_denoised_vs_clean": 20.5245258247141,
+    "mse_denoised_vs_clean": 0.008862319797500766,
+    "ssim_gain": 0.0033038418887110232,
+    "psnr_gain_db": 0.11778313981299604,
+    "mse_gain": 0.00024364006140641797
+  },
+  "runtime_seconds": 22.614946999999997,
+  "memory_peak_mb": 27.602371215820312
+}
