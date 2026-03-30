@@ -8,6 +8,11 @@ __pycache__/
 _archive/
 docs/
 data/
+.co3/
+img/
+/output/*/stats/history.jsonl
+/output/*/stats/metrics.json   
+/output/*/autoencoder.pt
 
 ################################################################################
 # macOS system files
@@ -233,6 +238,7 @@ Desktop.ini
 $RECYCLE.BIN/
 
 # MRI and medical imaging files
+assets/*.json
 *.nii
 *.nii.gz
 *.dcm
