@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 
+import image_enhancement.autoencoders.training as train_mod
 from image_enhancement.preprocessing import nifti_to_tiff, noisify, resize
 
 
@@ -17,6 +18,8 @@ def build_parser() -> argparse.ArgumentParser:
     nifti_to_tiff.build_parser(prep_sub)
     noisify.build_parser(prep_sub)
     resize.build_parser(prep_sub)
+
+    train_mod.add_train_parser(sub)
     return parser
 
 
@@ -33,6 +36,8 @@ def main() -> None:
             resize.main_ns(args)
         else:
             raise SystemExit(f"Unknown preprocess subcommand: {args.preprocess_cmd}")
+    elif args.command == "train-ae":
+        train_mod.train_cli(args)
     else:
         raise SystemExit(f"Unknown command: {args.command}")
 

@@ -69,12 +69,16 @@ image-enhancement preprocess resize -i assets/slice.tif -o assets/slice_small.ti
 
 image-enhancement preprocess resize -i assets/slice.tif -o assets/slice_small.tif --max-side 128 \
 && image-enhancement preprocess noisify -i assets/slice_small.tif -o assets/slice_small_noisy.tif --sigma 25
+
+# Train autoencoder on noisy TIFF; optional clean TIFF for eval PSNR/SSIM
+image-enhancement train-ae -v assets/slice_noisy.tif -u assets/slice.tif -o output/ae --epochs 200
 ```
 
 Equivalent module invocation:
 
 ```bash
 python -m image_enhancement.main preprocess noisify -i ... -o ... --sigma 25
+python -m image_enhancement.main train-ae -v ... -o output/ae
 ```
 
 ### CLI help (`argparse`)
@@ -84,6 +88,7 @@ Run these in the terminal to print usage and every flag for that command:
 ```bash
 python -m image_enhancement.main --help
 python -m image_enhancement.main preprocess --help
+python -m image_enhancement.main train-ae --help
 ```
 
 Preprocess subcommands each have their own options:
