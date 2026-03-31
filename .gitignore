@@ -10,9 +10,8 @@ docs/
 data/
 .co3/
 img/
-/output/*/stats/history.jsonl
-/output/*/stats/metrics.json   
-/output/*/autoencoder.pt
+/output 
+/assets 
 
 ################################################################################
 # macOS system files

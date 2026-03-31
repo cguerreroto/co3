@@ -203,9 +203,10 @@ python -m image_enhancement.main preprocess resize --help
 
 If the `image-enhancement` script is on your `PATH` (after `pip install -e .`), you can swap `python -m image_enhancement.main` for `image-enhancement` in the commands above (for example `image-enhancement preprocess --help`).
 
+---
 ### `train-ae` outputs and metrics
 
-Training supports two objectives. `--loss-mode blind_ssim` minimizes pooled SSIM loss between $\hat{u}$ and $v$ (blind objective). `--loss-mode hybrid_ssim_mse` minimizes `alpha*(1-SSIM(û,u)) + beta*MSE(û,u)` and therefore requires clean references (`-u`, `--clean-dir` + `--noisy-dir`, or manifest entries with `clean`). **Single-image mode** (`-v` / `--noisy`): one row per epoch in `history.jsonl`. **Multi-pair mode** (`--manifest` or `--clean-dir` + `--noisy-dir`): each epoch performs one optimization step per training pair (order optionally shuffled with `--shuffle`); logged `loss` is the **mean** training loss over pairs; SSIM/PSNR/MSE columns are **means over all pairs with clean references**. Validation pairs (`--val-manifest`) add `val_*` columns. Outputs include `autoencoder.pt`, `stats/metrics.json`, and `images/denoised_sample.tif` (first manifest pair after training). For an unbiased test slice, exclude it from training (`--exclude-from-train`) and run **`infer-ae`**.
+Training supports two objectives. `--loss-mode blind_ssim` minimizes pooled SSIM loss between $\hat{u}$ and $v$ (blind objective). `--loss-mode hybrid_ssim_mse` minimizes `alpha*(1-SSIM(û,u)) + beta*MSE(û,u)` and therefore requires clean references (`-u`, `--clean-dir` + `--noisy-dir`, or manifest entries with `clean`). Single-image mode (`-v` / `--noisy`): one row per epoch in `history.jsonl`. Multi-pair mode (`--manifest` or `--clean-dir` + `--noisy-dir`): each epoch performs one optimization step per training pair (order optionally shuffled with `--shuffle`); logged `loss` is the mean training loss over pairs; SSIM/PSNR/MSE columns are means over all pairs with clean references. Validation pairs (`--val-manifest`) add `val_*` columns. Outputs include `autoencoder.pt`, `stats/metrics.json`, and `images/denoised_sample.tif` (first manifest pair after training). For an unbiased test slice, exclude it from training (`--exclude-from-train`) and run `infer-ae`.
 
 When you pass `--clean` / `-u` (single mode) or use multi-pair mode with clean references, logs and `output/ae/stats/metrics.json` include full-reference evaluation (not part of the loss):
 
@@ -220,10 +221,42 @@ When you pass `--clean` / `-u` (single mode) or use multi-pair mode with clean r
 
 `metrics.json` also records `loss_mode`, `alpha`, `beta`, `window_size`, `lambda_residual`, `epsilon`, and paths. In blind mode, PSNR is often enough as a classical scalar alongside SSIM; in hybrid experiments it is useful to inspect raw `mse_vs_clean` directly because it is part of the optimized objective.
 
+---
+### `optimize-ga` / `infer-ga`
+
+The first GA implementation is intentionally narrower than AE:
+
+- it supports single-image denoising first
+- it uses a patchwise chromosome
+- it writes outputs under `output/ga/`
+
+GA optimization commands:
+
+```bash
+# Option A. Blind local-SSIM objective on one image
+image-enhancement optimize-ga -v assets/slices_noise_vol/slice_noisy_257.tif -u assets/slices_vol/slice_257.tif -o output/ga --generations 40 --population-size 30 --patch-size 8 --loss-mode blind_ssim
+
+# Option B. Hybrid SSIM + MSE on one image
+image-enhancement optimize-ga -v assets/slices_noise_vol/slice_noisy_257.tif -u assets/slices_vol/slice_257.tif -o output/ga_hybrid --generations 40 --population-size 30 --patch-size 8 --loss-mode hybrid_ssim_mse --alpha 0.8 --beta 0.2
+```
+
+Inference commands:
+
+```bash
+# Option A. Reconstruct and evaluate the saved GA solution
+image-enhancement infer-ga -c output/ga/ga_solution.npz -v assets/slices_noise_vol/slice_noisy_257.tif -u assets/slices_vol/slice_257.tif -o output/ga/infer_holdout
+
+# Option B. Reconstruct and evaluate the saved GA hybrid solution
+image-enhancement infer-ga -c output/ga_hybrid/ga_solution.npz -v assets/slices_noise_vol/slice_noisy_257.tif -u assets/slices_vol/slice_257.tif -o output/ga_hybrid/infer_holdout
+```
+
+GA metrics mirror the AE metrics as much as possible: `ssim_hat_vs_clean`, `ssim_hat_vs_noisy`, `ssim_clean_vs_noisy`, `mse_vs_clean`, and `psnr_vs_clean`, plus GA-specific settings such as `patch_size`, population size, generations, crossover probability, and mutation probability.
+
 ## Package layout
 
 - `src/image_enhancement/preprocessing/`: NIfTI export (slice ranges, optional glob), single-file and batch (`noisify-dir`) AWGN, resize
-- `src/image_enhancement/common/`: pooled SSIM loss, constraints
+- `src/image_enhancement/common/`: pooled SSIM loss, shared objectives, constraints
 - `src/image_enhancement/autoencoders/`: `model.py`, `training.py` (blind SSIM or hybrid SSIM+MSE)
+- `src/image_enhancement/genetic_algorithm/`: patchwise GA denoising (`ga_runner.py`, `optimize-ga`, `infer-ga`)
 
 Autoencoder checkpoints and logs are written under `output/ae/images/`, `output/ae/stats/` (`metrics.json`, `history.jsonl`), and `output/ae/autoencoder.pt`.

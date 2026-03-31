@@ -1,10 +1,9 @@
-"""CLI entry: preprocess (NIfTI, noisify, resize) and train-ae."""
+"""CLI entry: preprocess, AE training, and GA evolutionary search."""
 
 from __future__ import annotations
-
 import argparse
-
 import image_enhancement.autoencoders.training as train_mod
+import image_enhancement.genetic_algorithm.ga_runner as ga_mod
 from image_enhancement.preprocessing import nifti_to_tiff, noisify, noisify_dir, resize
 
 
@@ -22,6 +21,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     train_mod.add_train_parser(sub)
     train_mod.add_infer_parser(sub)
+    ga_mod.add_optimize_parser(sub)
+    ga_mod.add_infer_parser(sub)
     return parser
 
 
@@ -44,6 +45,10 @@ def main() -> None:
         train_mod.train_cli(args)
     elif args.command == "infer-ae":
         train_mod.infer_cli(args)
+    elif args.command == "optimize-ga":
+        ga_mod.optimize_cli(args)
+    elif args.command == "infer-ga":
+        ga_mod.infer_cli(args)
     else:
         raise SystemExit(f"Unknown command: {args.command}")
 
