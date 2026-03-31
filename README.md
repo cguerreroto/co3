@@ -53,14 +53,34 @@ image-enhancement --help
 ## Commands
 
 ```bash
+# ----------------------------------------------- convert nifti to tiff (jpg/jpeg/png) -----------------------------------------------
+
 # Single slice from NIfTI (axis 1 is often coronal in RAS; inspect with --output-dir first). Output can be .tif/.tiff/.png/.jpg/.jpeg.
 image-enhancement preprocess nifti-to-tiff -i assets/volume.nii.gz -o assets/slice.tif --axis 1 --index 257
 
 # Or export all slices along an axis for browsing
 image-enhancement preprocess nifti-to-tiff -i assets/volume.nii.gz --output-dir assets/slices --axis 1
 
-# AWGN: clean u to noisy v + JSON sidecar (sigma, epsilon_hint, …). Input and output can be .tif/.tiff/.png/.jpg/.jpeg.
+# Autoencoders: Only slices 250–350 (inclusive), or many volumes via glob (each under output-root/<stem>/)
+image-enhancement preprocess nifti-to-tiff -i assets/volume.nii.gz --output-dir assets/slices_vol --axis 1 --index-start 250 --index-end 350
+
+image-enhancement preprocess nifti-to-tiff --input-glob "assets/*.nii.gz" --output-root assets/slices_by_volume --output-dir assets/_argparse_dummy --axis 1 --index-start 250 --index-end 350
+
+
+# -------------------------------------------------------- Preprocess: noisify --------------------------------------------------------
+
+# AWGN for one image (u -> v) + JSON sidecar (sigma, epsilon_hint, ...).  Input and output can be .tif/.tiff/.png/.jpg/.jpeg.
 image-enhancement preprocess noisify -i assets/slice.tif -o assets/slice_noisy.tif --sigma 25
+
+# AWGN for an entire folder tree: mirror all images and keep relative paths
+# assets/slices_vol/...      -> assets/slices_noise_vol/...
+# assets/slices_by_volume/... -> assets/slices_noise_by_volume/...
+# filenames are renamed like: slice_257.tif -> slice_noisy_257.tif (+ sidecar .json)
+image-enhancement preprocess noisify-dir --clean-dir assets/slices_vol --noisy-dir assets/slices_noise_vol --sigma 25
+image-enhancement preprocess noisify-dir --clean-dir assets/slices_by_volume --noisy-dir assets/slices_noise_by_volume --sigma 25
+
+
+# -------------------------------------------------------- Preprocess: resize --------------------------------------------------------
 
 # Resize for GA/PSO branch (proportional, max side 128). Input and output can be .tif/.tiff/.png/.jpg/.jpeg.
 image-enhancement preprocess resize -i assets/slice.tif -o assets/slice_small.tif --max-side 128
@@ -70,12 +90,28 @@ image-enhancement preprocess resize -i assets/slice.tif -o assets/slice_small.ti
 image-enhancement preprocess resize -i assets/slice.tif -o assets/slice_small.tif --max-side 128 \
 && image-enhancement preprocess noisify -i assets/slice_small.tif -o assets/slice_small_noisy.tif --sigma 25
 
+
+# ------------------------------------------------------- Autoencoders: training -------------------------------------------------------
+
 # Train autoencoder on noisy TIFF; optional clean TIFF for eval metrics
 image-enhancement train-ae -v assets/slice_noisy.tif -u assets/slice.tif -o output/ae --epochs 200
 
 # Optional residual-energy soft penalty (discourages identity hat(u)=v); epsilon ~ n*sigma^2 from noisify JSON
 image-enhancement train-ae -v assets/slice_noisy.tif -u assets/slice.tif -o output/ae \
   --lambda-residual 1e-4 --noise-meta assets/slice_noisy.tif.json
+
+# Multi-pair training (mirrored clean/noisy directories) — one Adam step per image per epoch; metrics are epoch means
+image-enhancement train-ae --clean-dir assets/slices_by_volume --noisy-dir assets/slices_noise_by_volume -o output/ae --epochs 50 --shuffle
+
+# Or JSONL manifest: one {"noisy":"...","clean":"..."} per line. Hold out a slice by listing it in exclude.txt
+image-enhancement train-ae --manifest train_pairs.jsonl --exclude-from-train exclude.txt -o output/ae
+
+
+# ------------------------------------------------------- Autoencoders: infer  -------------------------------------------------------
+
+# After training, denoise one held-out noisy slice (writes denoised.tif + infer_metrics.json)
+# Example using generated folders (replace volume/slice as needed):
+image-enhancement infer-ae -c output/ae/autoencoder.pt -v assets/slices_noise_by_volume/coronacases_002/slice_noisy_257.tif -u assets/slices_by_volume/coronacases_002/slice_257.tif -o output/ae/infer_holdout
 ```
 
 Equivalent module invocation:
@@ -93,6 +129,7 @@ Run these in the terminal to print usage and every flag for that command:
 python -m image_enhancement.main --help
 python -m image_enhancement.main preprocess --help
 python -m image_enhancement.main train-ae --help
+python -m image_enhancement.main infer-ae --help
 ```
 
 Preprocess subcommands each have their own options:
@@ -100,6 +137,7 @@ Preprocess subcommands each have their own options:
 ```bash
 python -m image_enhancement.main preprocess nifti-to-tiff --help
 python -m image_enhancement.main preprocess noisify --help
+python -m image_enhancement.main preprocess noisify-dir --help
 python -m image_enhancement.main preprocess resize --help
 ```
 
@@ -107,7 +145,9 @@ If the `image-enhancement` script is on your `PATH` (after `pip install -e .`), 
 
 ### `train-ae` outputs and metrics
 
-Training minimizes pooled SSIM loss between $\hat{u}$ and $v$ (blind objective). When you pass `--clean` / `-u`, logs and `output/ae/stats/metrics.json` include full-reference evaluation (not part of the loss):
+Training minimizes pooled SSIM loss between $\hat{u}$ and $v$ (blind objective). **Single-image mode** (`-v` / `--noisy`): one row per epoch in `history.jsonl`. **Multi-pair mode** (`--manifest` or `--clean-dir` + `--noisy-dir`): each epoch performs one optimization step per training pair (order optionally shuffled with `--shuffle`); logged `loss` is the **mean** training loss over pairs; SSIM/PSNR columns are **means over all pairs with clean references**. Validation pairs (`--val-manifest`) add `val_*` columns. Outputs include `autoencoder.pt`, `stats/metrics.json`, and `images/denoised_sample.tif` (first manifest pair after training). For an unbiased test slice, exclude it from training (`--exclude-from-train`) and run **`infer-ae`**.
+
+When you pass `--clean` / `-u` (single mode) or use multi-pair mode with clean references, logs and `output/ae/stats/metrics.json` include full-reference evaluation (not part of the loss):
 
 | Field | Meaning |
 | ----- | ------- |
@@ -121,7 +161,7 @@ Training minimizes pooled SSIM loss between $\hat{u}$ and $v$ (blind objective).
 
 ## Package layout
 
-- `src/image_enhancement/preprocessing/`: NIfTI export, AWGN, resize
+- `src/image_enhancement/preprocessing/`: NIfTI export (slice ranges, optional glob), single-file and batch (`noisify-dir`) AWGN, resize
 - `src/image_enhancement/common/`: pooled SSIM loss, constraints
 - `src/image_enhancement/autoencoders/`: `model.py`, `training.py` (SSIM loss vs $v$)
 

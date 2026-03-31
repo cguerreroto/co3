@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 
 import image_enhancement.autoencoders.training as train_mod
-from image_enhancement.preprocessing import nifti_to_tiff, noisify, resize
+from image_enhancement.preprocessing import nifti_to_tiff, noisify, noisify_dir, resize
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -17,9 +17,11 @@ def build_parser() -> argparse.ArgumentParser:
     prep_sub = prep.add_subparsers(dest="preprocess_cmd", required=True)
     nifti_to_tiff.build_parser(prep_sub)
     noisify.build_parser(prep_sub)
+    noisify_dir.build_parser(prep_sub)
     resize.build_parser(prep_sub)
 
     train_mod.add_train_parser(sub)
+    train_mod.add_infer_parser(sub)
     return parser
 
 
@@ -32,12 +34,16 @@ def main() -> None:
             nifti_to_tiff.main_ns(args)
         elif args.preprocess_cmd == "noisify":
             noisify.main_ns(args)
+        elif args.preprocess_cmd == "noisify-dir":
+            noisify_dir.main_ns(args)
         elif args.preprocess_cmd == "resize":
             resize.main_ns(args)
         else:
             raise SystemExit(f"Unknown preprocess subcommand: {args.preprocess_cmd}")
     elif args.command == "train-ae":
         train_mod.train_cli(args)
+    elif args.command == "infer-ae":
+        train_mod.infer_cli(args)
     else:
         raise SystemExit(f"Unknown command: {args.command}")
 
