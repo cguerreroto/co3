@@ -38,6 +38,68 @@ def psnr_tensor(x: torch.Tensor, y: torch.Tensor, l: float = 1.0) -> float:
     return float(10.0 * torch.log10((l * l) / mse))
 
 
+def mse_tensor(x: torch.Tensor, y: torch.Tensor) -> float:
+    """Compute mean squared error between tensors ``x`` and ``y``."""
+    return float(torch.mean((x - y) ** 2).detach().cpu())
+
+
+def compute_loss(
+    u_hat: torch.Tensor,
+    v: torch.Tensor,
+    *,
+    u: torch.Tensor | None,
+    criterion: PooledSSIMLoss,
+    window_size: int,
+    loss_mode: str,
+    alpha: float,
+    beta: float,
+) -> tuple[torch.Tensor, dict[str, float]]:
+    """Compute training loss and component values for blind or hybrid mode."""
+    if loss_mode == "blind_ssim":
+        loss = criterion(u_hat, v)
+        return loss, {"loss_blind_ssim": float(loss.detach().cpu())}
+
+    if loss_mode == "hybrid_ssim_mse":
+        if u is None:
+            raise ValueError("hybrid_ssim_mse requires a clean target u")
+        ssim_term = 1.0 - pooled_ssim(u_hat, u, window_size=window_size, L=1.0)
+        mse_term = torch.mean((u_hat - u) ** 2)
+        loss = alpha * ssim_term + beta * mse_term
+        return loss, {
+            "loss_ssim_term": float(ssim_term.detach().cpu()),
+            "loss_mse_term": float(mse_term.detach().cpu()),
+        }
+
+    raise ValueError(f"Unknown loss_mode: {loss_mode}")
+
+
+def compute_eval_metrics(
+    u_hat: torch.Tensor,
+    v: torch.Tensor,
+    *,
+    u: torch.Tensor | None,
+    window_size: int,
+) -> dict[str, float]:
+    """Compute common SSIM/PSNR/MSE metrics; clean-reference metrics require ``u``."""
+    rec: dict[str, float] = {
+        "ssim_hat_vs_noisy": float(
+            pooled_ssim(u_hat, v, window_size=window_size, L=1.0).detach().cpu()
+        )
+    }
+    if u is None:
+        return rec
+    rec["ssim_hat_vs_clean"] = float(
+        pooled_ssim(u_hat, u, window_size=window_size, L=1.0).detach().cpu()
+    )
+    rec["ssim_vs_clean"] = rec["ssim_hat_vs_clean"]
+    rec["ssim_clean_vs_noisy"] = float(
+        pooled_ssim(u, v, window_size=window_size, L=1.0).detach().cpu()
+    )
+    rec["mse_vs_clean"] = mse_tensor(u_hat, u)
+    rec["psnr_vs_clean"] = psnr_tensor(u_hat, u)
+    return rec
+
+
 def load_pairs_from_manifest(path: Path) -> list[tuple[Path, Path | None]]:
     """Load (noisy, clean) paths from JSON array file or JSONL (one object per line)."""
     path = Path(path)
@@ -147,7 +209,7 @@ def _eval_aggregate(
     dev: torch.device,
     window_size: int,
 ) -> dict[str, float] | None:
-    """Average SSIM/PSNR vs clean over pairs that have ground truth."""
+    """Average evaluation metrics over pairs that have clean references."""
     rows: list[dict[str, float]] = []
     model.eval()
     with torch.no_grad():
@@ -161,20 +223,7 @@ def _eval_aggregate(
             v = _to_tensor_hw1(v_np).to(dev)
             u = _to_tensor_hw1(u_np).to(dev)
             u_hat = model(v)
-            rows.append(
-                {
-                    "ssim_hat_vs_clean": float(
-                        pooled_ssim(u_hat, u, window_size=window_size, L=1.0).detach().cpu()
-                    ),
-                    "ssim_hat_vs_noisy": float(
-                        pooled_ssim(u_hat, v, window_size=window_size, L=1.0).detach().cpu()
-                    ),
-                    "ssim_clean_vs_noisy": float(
-                        pooled_ssim(u, v, window_size=window_size, L=1.0).detach().cpu()
-                    ),
-                    "psnr_vs_clean": psnr_tensor(u_hat, u),
-                }
-            )
+            rows.append(compute_eval_metrics(u_hat, v, u=u, window_size=window_size))
     if not rows:
         return None
     keys = rows[0].keys()
@@ -195,6 +244,9 @@ def train_multi(
     device: str | None = None,
     seed: int = 42,
     shuffle: bool = False,
+    loss_mode: str = "blind_ssim",
+    alpha: float = 0.8,
+    beta: float = 0.2,
 ) -> dict[str, Any]:
     """
     Train on multiple (noisy, clean?) pairs; one optimizer step per pair per epoch (stochastic over images).
@@ -223,6 +275,9 @@ def train_multi(
     opt = optim.Adam(model.parameters(), lr=lr)
     criterion = PooledSSIMLoss(window_size=window_size, L=1.0).to(dev)
 
+    if loss_mode == "hybrid_ssim_mse" and any(clean_p is None for _, clean_p in pairs):
+        raise ValueError("hybrid_ssim_mse requires clean references for all training pairs")
+
     history: list[dict[str, float | int]] = []
     for ep in range(1, epochs + 1):
         model.train()
@@ -235,9 +290,24 @@ def train_multi(
             noisy_p, clean_p = pairs[i]
             v_np = _load_gray_01(noisy_p)
             v = _to_tensor_hw1(v_np).to(dev)
+            u = None
+            if clean_p is not None:
+                u_np = _load_gray_01(clean_p)
+                if u_np.shape != v_np.shape:
+                    raise ValueError(f"clean and noisy must have same shape: {clean_p} vs {noisy_p}")
+                u = _to_tensor_hw1(u_np).to(dev)
             opt.zero_grad()
             u_hat = model(v)
-            loss = criterion(u_hat, v)
+            loss, _loss_parts = compute_loss(
+                u_hat,
+                v,
+                u=u,
+                criterion=criterion,
+                window_size=window_size,
+                loss_mode=loss_mode,
+                alpha=alpha,
+                beta=beta,
+            )
             total = loss
             if lambda_residual > 0 and epsilon is not None:
                 total = total + lambda_residual * residual_energy_penalty(v, u_hat, epsilon)
@@ -266,6 +336,8 @@ def train_multi(
                     f" mean SSIM(û,u)={rec['ssim_hat_vs_clean']:.4f} SSIM(û,v)={rec['ssim_hat_vs_noisy']:.4f}",
                     end="",
                 )
+                if "mse_vs_clean" in rec:
+                    print(f" MSE={rec['mse_vs_clean']:.6f}", end="")
                 print(f" PSNR={rec['psnr_vs_clean']:.2f} dB", end="")
             print()
 
@@ -282,6 +354,9 @@ def train_multi(
 
     final: dict[str, Any] = {
         "mode": "multi",
+        "loss_mode": loss_mode,
+        "alpha": alpha,
+        "beta": beta,
         "n_train_pairs": len(pairs),
         "epochs": epochs,
         "window_size": window_size,
@@ -293,7 +368,14 @@ def train_multi(
         "history_tail": history[-5:] if len(history) > 5 else history,
     }
     last = history[-1] if history else {}
-    for k in ("psnr_vs_clean", "ssim_hat_vs_clean", "ssim_vs_clean", "ssim_hat_vs_noisy", "ssim_clean_vs_noisy"):
+    for k in (
+        "psnr_vs_clean",
+        "mse_vs_clean",
+        "ssim_hat_vs_clean",
+        "ssim_vs_clean",
+        "ssim_hat_vs_noisy",
+        "ssim_clean_vs_noisy",
+    ):
         if k in last:
             final[k] = last[k]
     if "ssim_hat_vs_clean" in last:
@@ -321,6 +403,9 @@ def train(
     epsilon: float | None = None,
     device: str | None = None,
     seed: int = 42,
+    loss_mode: str = "blind_ssim",
+    alpha: float = 0.8,
+    beta: float = 0.2,
 ) -> dict[str, Any]:
     """
     Train denoising AE on a single noisy input ``noisy_path`` and save artifacts under ``out_dir``.
@@ -363,6 +448,8 @@ def train(
     criterion = PooledSSIMLoss(window_size=window_size, L=1.0).to(dev)
 
     u_dev = u.to(dev) if u is not None else None
+    if loss_mode == "hybrid_ssim_mse" and u_dev is None:
+        raise ValueError("hybrid_ssim_mse requires --clean/-u in single-image mode")
     ssim_clean_vs_noisy: float | None = None
     if u_dev is not None:
         with torch.no_grad():
@@ -375,7 +462,16 @@ def train(
         model.train()
         opt.zero_grad()
         u_hat = model(v)
-        loss = criterion(u_hat, v)
+        loss, _loss_parts = compute_loss(
+            u_hat,
+            v,
+            u=u_dev,
+            criterion=criterion,
+            window_size=window_size,
+            loss_mode=loss_mode,
+            alpha=alpha,
+            beta=beta,
+        )
         total = loss
         if lambda_residual > 0 and epsilon is not None:
             total = total + lambda_residual * residual_energy_penalty(v, u_hat, epsilon)
@@ -385,16 +481,7 @@ def train(
         rec: dict[str, float | int] = {"epoch": int(ep), "loss": float(loss.detach().cpu())}
         if u_dev is not None:
             with torch.no_grad():
-                ssim_hat_u = float(
-                    pooled_ssim(u_hat, u_dev, window_size=window_size, L=1.0).detach().cpu()
-                )
-                ssim_hat_v = float(
-                    pooled_ssim(u_hat, v, window_size=window_size, L=1.0).detach().cpu()
-                )
-                rec["ssim_hat_vs_clean"] = ssim_hat_u
-                rec["ssim_vs_clean"] = ssim_hat_u
-                rec["ssim_hat_vs_noisy"] = ssim_hat_v
-                rec["psnr_vs_clean"] = psnr_tensor(u_hat, u_dev)
+                rec.update(compute_eval_metrics(u_hat, v, u=u_dev, window_size=window_size))
                 if ep == 1:
                     rec["ssim_clean_vs_noisy"] = ssim_clean_vs_noisy
         history.append(rec)
@@ -405,6 +492,8 @@ def train(
                     f" SSIM(û,u)={rec['ssim_hat_vs_clean']:.4f} SSIM(û,v)={rec['ssim_hat_vs_noisy']:.4f}",
                     end="",
                 )
+                if "mse_vs_clean" in rec:
+                    print(f" MSE={rec['mse_vs_clean']:.6f}", end="")
                 print(f" PSNR(u,û)={rec['psnr_vs_clean']:.2f} dB", end="")
             print()
 
@@ -418,6 +507,9 @@ def train(
 
     final: dict[str, Any] = {
         "mode": "single",
+        "loss_mode": loss_mode,
+        "alpha": alpha,
+        "beta": beta,
         "epochs": epochs,
         "window_size": window_size,
         "lambda_residual": lambda_residual,
@@ -430,6 +522,7 @@ def train(
     if u is not None:
         last = history[-1]
         final["psnr_vs_clean"] = last.get("psnr_vs_clean")
+        final["mse_vs_clean"] = last.get("mse_vs_clean")
         final["ssim_hat_vs_clean"] = last.get("ssim_hat_vs_clean")
         final["ssim_vs_clean"] = last.get("ssim_vs_clean")
         final["ssim_hat_vs_noisy"] = last.get("ssim_hat_vs_noisy")
@@ -492,6 +585,7 @@ def infer_ae(
         metrics["ssim_clean_vs_noisy"] = float(
             pooled_ssim(u, v, window_size=window_size, L=1.0).detach().cpu()
         )
+        metrics["mse_vs_clean"] = mse_tensor(u_hat, u)
         metrics["psnr_vs_clean"] = psnr_tensor(u_hat, u)
         metrics["clean_path"] = str(clean_path.resolve())
     with open(out_dir / "infer_metrics.json", "w", encoding="utf-8") as f:
@@ -553,6 +647,14 @@ def add_train_parser(sub: argparse._SubParsersAction | None = None) -> argparse.
     p.add_argument("--epochs", type=int, default=200)
     p.add_argument("--lr", type=float, default=1e-3)
     p.add_argument("--window-size", type=int, default=11)
+    p.add_argument(
+        "--loss-mode",
+        choices=("blind_ssim", "hybrid_ssim_mse"),
+        default="blind_ssim",
+        help="blind_ssim: optimize 1-SSIM(û,v); hybrid_ssim_mse: optimize alpha*(1-SSIM(û,u)) + beta*MSE(û,u)",
+    )
+    p.add_argument("--alpha", type=float, default=0.8, help="Weight for SSIM term in hybrid loss")
+    p.add_argument("--beta", type=float, default=0.2, help="Weight for MSE term in hybrid loss")
     p.add_argument("--lambda-residual", type=float, default=0.0, help="Weight for ||v-û||^2 soft penalty")
     p.add_argument("--epsilon", type=float, default=None, help="Residual budget (or use sidecar JSON)")
     p.add_argument("--noise-meta", type=Path, default=None, help="JSON from noisify (epsilon_hint)")
@@ -605,6 +707,9 @@ def train_cli(args: argparse.Namespace) -> None:
             device=args.device,
             seed=args.seed,
             shuffle=args.shuffle,
+            loss_mode=args.loss_mode,
+            alpha=args.alpha,
+            beta=args.beta,
         )
     elif args.clean_dir is not None and args.noisy_dir is not None:
         pairs = load_pairs_from_dirs(args.clean_dir, args.noisy_dir)
@@ -624,6 +729,9 @@ def train_cli(args: argparse.Namespace) -> None:
             device=args.device,
             seed=args.seed,
             shuffle=args.shuffle,
+            loss_mode=args.loss_mode,
+            alpha=args.alpha,
+            beta=args.beta,
         )
     else:
         if args.noisy is None:
@@ -640,6 +748,9 @@ def train_cli(args: argparse.Namespace) -> None:
             epsilon=args.epsilon,
             device=args.device,
             seed=args.seed,
+            loss_mode=args.loss_mode,
+            alpha=args.alpha,
+            beta=args.beta,
         )
     print(f"Done. Outputs under {args.out_dir}")
 

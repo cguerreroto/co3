@@ -93,25 +93,85 @@ image-enhancement preprocess resize -i assets/slice.tif -o assets/slice_small.ti
 
 # ------------------------------------------------------- Autoencoders: training -------------------------------------------------------
 
-# Train autoencoder on noisy TIFF; optional clean TIFF for eval metrics
-image-enhancement train-ae -v assets/slice_noisy.tif -u assets/slice.tif -o output/ae --epochs 200
+# .........................................................
+# 1. Single image
+# .........................................................
 
-# Optional residual-energy soft penalty (discourages identity hat(u)=v); epsilon ~ n*sigma^2 from noisify JSON
-image-enhancement train-ae -v assets/slice_noisy.tif -u assets/slice.tif -o output/ae \
-  --lambda-residual 1e-4 --noise-meta assets/slice_noisy.tif.json
+# One noisy/clean pair only
+# Option A. Default mode: blind_ssim
+# optimize 1 - SSIM(û,v)
+image-enhancement train-ae -v assets/slices_noise_by_volume/volume/slice_noisy_257.tif -u assets/slices_by_volume/volume/slice_257.tif -o output/ae --epochs 200 --loss-mode blind_ssim
 
-# Multi-pair training (mirrored clean/noisy directories) — one Adam step per image per epoch; metrics are epoch means
-image-enhancement train-ae --clean-dir assets/slices_by_volume --noisy-dir assets/slices_noise_by_volume -o output/ae --epochs 50 --shuffle
+# Option B. Hybrid supervised mode
+# optimize alpha*(1-SSIM(û,u)) + beta*MSE(û,u)
+image-enhancement train-ae -v assets/slices_noise_by_volume/volume/slice_noisy_257.tif -u assets/slices_by_volume/volume/slice_257.tif -o output/ae_hybrid --epochs 200 \
+  --loss-mode hybrid_ssim_mse --alpha 0.8 --beta 0.2
+
+# Optional residual-energy soft penalty for the same single image
+image-enhancement train-ae -v assets/slices_noise_by_volume/volume/slice_noisy_257.tif -u assets/slices_by_volume/volume/slice_257.tif -o output/ae \
+  --lambda-residual 1e-4 --noise-meta assets/slices_noise_by_volume/volume/slice_noisy_257.tif.json
+
+# .........................................................
+# 2. Group of images in one folder
+# .........................................................
+
+# Example: assets/slices_vol <-> assets/slices_noise_vol
+# One optimization step per image per epoch; metrics are epoch means
+# Option A. Default mode: blind_ssim
+image-enhancement train-ae --clean-dir assets/slices_vol --noisy-dir assets/slices_noise_vol -o output/ae --epochs 50 --shuffle --loss-mode blind_ssim
+
+# Option B. Hybrid supervised mode
+# optimize alpha*(1-SSIM(û,u)) + beta*MSE(û,u)
+image-enhancement train-ae --clean-dir assets/slices_vol --noisy-dir assets/slices_noise_vol -o output/ae_hybrid \
+  --epochs 50 --shuffle --loss-mode hybrid_ssim_mse --alpha 0.8 --beta 0.2
+
+# .........................................................
+# 3. Group of images in multiple folders
+# .........................................................
+
+# Example: assets/slices_by_volume/<volume_name>/... <-> assets/slices_noise_by_volume/<volume_name>/...
+# Option A. Default mode: blind_ssim
+image-enhancement train-ae --clean-dir assets/slices_by_volume --noisy-dir assets/slices_noise_by_volume -o output/ae --epochs 50 --shuffle --loss-mode blind_ssim
+
+# Option B. Hybrid supervised mode
+# optimize alpha*(1-SSIM(û,u)) + beta*MSE(û,u)
+image-enhancement train-ae --clean-dir assets/slices_by_volume --noisy-dir assets/slices_noise_by_volume -o output/ae_hybrid \
+  --epochs 50 --shuffle --loss-mode hybrid_ssim_mse --alpha 0.8 --beta 0.2
 
 # Or JSONL manifest: one {"noisy":"...","clean":"..."} per line. Hold out a slice by listing it in exclude.txt
 image-enhancement train-ae --manifest train_pairs.jsonl --exclude-from-train exclude.txt -o output/ae
 
 
 # ------------------------------------------------------- Autoencoders: infer  -------------------------------------------------------
+# .........................................................
+# 1. Single image
+# .........................................................
 
-# After training, denoise one held-out noisy slice (writes denoised.tif + infer_metrics.json)
-# Example using generated folders (replace volume/slice as needed):
-image-enhancement infer-ae -c output/ae/autoencoder.pt -v assets/slices_noise_by_volume/coronacases_002/slice_noisy_257.tif -u assets/slices_by_volume/coronacases_002/slice_257.tif -o output/ae/infer_holdout
+# Option A. Checkpoint trained with blind_ssim
+image-enhancement infer-ae -c output/ae/autoencoder.pt -v assets/slices_noise_by_volume/volume/slice_noisy_257.tif -u assets/slices_by_volume/volume/slice_257.tif -o output/ae/infer_holdout
+
+# Option B. Checkpoint trained with hybrid_ssim_mse
+image-enhancement infer-ae -c output/ae_hybrid/autoencoder.pt -v assets/slices_noise_by_volume/volume/slice_noisy_257.tif -u assets/slices_by_volume/volume/slice_257.tif -o output/ae_hybrid/infer_holdout
+
+# .........................................................
+# 2. Group of images in one folder (if training used assets/slices_vol and assets/slices_noise_vol)
+# .........................................................
+
+# Option A. Checkpoint trained with blind_ssim
+image-enhancement infer-ae -c output/ae/autoencoder.pt -v assets/slices_noise_vol/slice_noisy_257.tif -u assets/slices_vol/slice_257.tif -o output/ae/infer_holdout
+
+# Option B. Checkpoint trained with hybrid_ssim_mse
+image-enhancement infer-ae -c output/ae_hybrid/autoencoder.pt -v assets/slices_noise_vol/slice_noisy_257.tif -u assets/slices_vol/slice_257.tif -o output/ae_hybrid/infer_holdout
+
+# .........................................................
+# 3. Group of images in multiple folders (if training used assets/slices_by_volume and assets/slices_noise_by_volume)
+# .........................................................
+
+# Option A. Checkpoint trained with blind_ssim
+image-enhancement infer-ae -c output/ae/autoencoder.pt -v assets/slices_noise_by_volume/volume/slice_noisy_257.tif -u assets/slices_by_volume/volume/slice_257.tif -o output/ae/infer_holdout
+
+# Option B. Checkpoint trained with hybrid_ssim_mse
+image-enhancement infer-ae -c output/ae_hybrid/autoencoder.pt -v assets/slices_noise_by_volume/volume/slice_noisy_257.tif -u assets/slices_by_volume/volume/slice_257.tif -o output/ae_hybrid/infer_holdout
 ```
 
 Equivalent module invocation:
@@ -145,7 +205,7 @@ If the `image-enhancement` script is on your `PATH` (after `pip install -e .`), 
 
 ### `train-ae` outputs and metrics
 
-Training minimizes pooled SSIM loss between $\hat{u}$ and $v$ (blind objective). **Single-image mode** (`-v` / `--noisy`): one row per epoch in `history.jsonl`. **Multi-pair mode** (`--manifest` or `--clean-dir` + `--noisy-dir`): each epoch performs one optimization step per training pair (order optionally shuffled with `--shuffle`); logged `loss` is the **mean** training loss over pairs; SSIM/PSNR columns are **means over all pairs with clean references**. Validation pairs (`--val-manifest`) add `val_*` columns. Outputs include `autoencoder.pt`, `stats/metrics.json`, and `images/denoised_sample.tif` (first manifest pair after training). For an unbiased test slice, exclude it from training (`--exclude-from-train`) and run **`infer-ae`**.
+Training supports two objectives. `--loss-mode blind_ssim` minimizes pooled SSIM loss between $\hat{u}$ and $v$ (blind objective). `--loss-mode hybrid_ssim_mse` minimizes `alpha*(1-SSIM(û,u)) + beta*MSE(û,u)` and therefore requires clean references (`-u`, `--clean-dir` + `--noisy-dir`, or manifest entries with `clean`). **Single-image mode** (`-v` / `--noisy`): one row per epoch in `history.jsonl`. **Multi-pair mode** (`--manifest` or `--clean-dir` + `--noisy-dir`): each epoch performs one optimization step per training pair (order optionally shuffled with `--shuffle`); logged `loss` is the **mean** training loss over pairs; SSIM/PSNR/MSE columns are **means over all pairs with clean references**. Validation pairs (`--val-manifest`) add `val_*` columns. Outputs include `autoencoder.pt`, `stats/metrics.json`, and `images/denoised_sample.tif` (first manifest pair after training). For an unbiased test slice, exclude it from training (`--exclude-from-train`) and run **`infer-ae`**.
 
 When you pass `--clean` / `-u` (single mode) or use multi-pair mode with clean references, logs and `output/ae/stats/metrics.json` include full-reference evaluation (not part of the loss):
 
@@ -155,14 +215,15 @@ When you pass `--clean` / `-u` (single mode) or use multi-pair mode with clean r
 | `ssim_vs_clean` | Same value as `ssim_hat_vs_clean` (backward-compatible alias) |
 | `ssim_hat_vs_noisy` | Pooled SSIM $(\hat{u},v)$. Similarity to the noisy input |
 | `ssim_clean_vs_noisy` | Pooled SSIM $(u,v)$. Noise difficulty baseline (also on epoch 1 in `history.jsonl`) |
+| `mse_vs_clean` | MSE $(\hat{u},u)$. Raw pixelwise error to the clean target |
 | `psnr_vs_clean` | PSNR $(u,\hat{u})$. Classical baseline (monotone in MSE) |
 
-`metrics.json` also records `window_size`, `lambda_residual`, `epsilon`, and paths. PSNR is sufficient if you want a classical scalar alongside SSIM; raw MSE is redundant with PSNR on the same pair unless you need it for statistics.
+`metrics.json` also records `loss_mode`, `alpha`, `beta`, `window_size`, `lambda_residual`, `epsilon`, and paths. In blind mode, PSNR is often enough as a classical scalar alongside SSIM; in hybrid experiments it is useful to inspect raw `mse_vs_clean` directly because it is part of the optimized objective.
 
 ## Package layout
 
 - `src/image_enhancement/preprocessing/`: NIfTI export (slice ranges, optional glob), single-file and batch (`noisify-dir`) AWGN, resize
 - `src/image_enhancement/common/`: pooled SSIM loss, constraints
-- `src/image_enhancement/autoencoders/`: `model.py`, `training.py` (SSIM loss vs $v$)
+- `src/image_enhancement/autoencoders/`: `model.py`, `training.py` (blind SSIM or hybrid SSIM+MSE)
 
 Autoencoder checkpoints and logs are written under `output/ae/images/`, `output/ae/stats/` (`metrics.json`, `history.jsonl`), and `output/ae/autoencoder.pt`.
