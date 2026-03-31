@@ -70,8 +70,12 @@ image-enhancement preprocess resize -i assets/slice.tif -o assets/slice_small.ti
 image-enhancement preprocess resize -i assets/slice.tif -o assets/slice_small.tif --max-side 128 \
 && image-enhancement preprocess noisify -i assets/slice_small.tif -o assets/slice_small_noisy.tif --sigma 25
 
-# Train autoencoder on noisy TIFF; optional clean TIFF for eval PSNR/SSIM
+# Train autoencoder on noisy TIFF; optional clean TIFF for eval metrics
 image-enhancement train-ae -v assets/slice_noisy.tif -u assets/slice.tif -o output/ae --epochs 200
+
+# Optional residual-energy soft penalty (discourages identity hat(u)=v); epsilon ~ n*sigma^2 from noisify JSON
+image-enhancement train-ae -v assets/slice_noisy.tif -u assets/slice.tif -o output/ae \
+  --lambda-residual 1e-4 --noise-meta assets/slice_noisy.tif.json
 ```
 
 Equivalent module invocation:
@@ -100,3 +104,25 @@ python -m image_enhancement.main preprocess resize --help
 ```
 
 If the `image-enhancement` script is on your `PATH` (after `pip install -e .`), you can swap `python -m image_enhancement.main` for `image-enhancement` in the commands above (for example `image-enhancement preprocess --help`).
+
+### `train-ae` outputs and metrics
+
+Training minimizes pooled SSIM loss between $\hat{u}$ and $v$ (blind objective). When you pass `--clean` / `-u`, logs and `output/ae/stats/metrics.json` include full-reference evaluation (not part of the loss):
+
+| Field | Meaning |
+| ----- | ------- |
+| `ssim_hat_vs_clean` | Pooled SSIM $(\hat{u},u)$. Primary quality vs ground truth |
+| `ssim_vs_clean` | Same value as `ssim_hat_vs_clean` (backward-compatible alias) |
+| `ssim_hat_vs_noisy` | Pooled SSIM $(\hat{u},v)$. Similarity to the noisy input |
+| `ssim_clean_vs_noisy` | Pooled SSIM $(u,v)$. Noise difficulty baseline (also on epoch 1 in `history.jsonl`) |
+| `psnr_vs_clean` | PSNR $(u,\hat{u})$. Classical baseline (monotone in MSE) |
+
+`metrics.json` also records `window_size`, `lambda_residual`, `epsilon`, and paths. PSNR is sufficient if you want a classical scalar alongside SSIM; raw MSE is redundant with PSNR on the same pair unless you need it for statistics.
+
+## Package layout
+
+- `src/image_enhancement/preprocessing/`: NIfTI export, AWGN, resize
+- `src/image_enhancement/common/`: pooled SSIM loss, constraints
+- `src/image_enhancement/autoencoders/`: `model.py`, `training.py` (SSIM loss vs $v$)
+
+Autoencoder checkpoints and logs are written under `output/ae/images/`, `output/ae/stats/` (`metrics.json`, `history.jsonl`), and `output/ae/autoencoder.pt`.

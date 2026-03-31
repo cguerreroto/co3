@@ -89,7 +89,15 @@ def train(
     opt = optim.Adam(model.parameters(), lr=lr)
     criterion = PooledSSIMLoss(window_size=window_size, L=1.0).to(dev)
 
-    history: list[dict[str, float]] = []
+    u_dev = u.to(dev) if u is not None else None
+    ssim_clean_vs_noisy: float | None = None
+    if u_dev is not None:
+        with torch.no_grad():
+            ssim_clean_vs_noisy = float(
+                pooled_ssim(u_dev, v, window_size=window_size, L=1.0).detach().cpu()
+            )
+
+    history: list[dict[str, float | int]] = []
     for ep in range(1, epochs + 1):
         model.train()
         opt.zero_grad()
@@ -101,17 +109,29 @@ def train(
         total.backward()
         opt.step()
 
-        rec: dict[str, float] = {"epoch": float(ep), "loss": float(loss.detach().cpu())}
-        if u is not None:
+        rec: dict[str, float | int] = {"epoch": int(ep), "loss": float(loss.detach().cpu())}
+        if u_dev is not None:
             with torch.no_grad():
-                rec["psnr_vs_clean"] = psnr_tensor(u_hat, u.to(dev))
-                rec["ssim_vs_clean"] = float(
-                    pooled_ssim(u_hat, u.to(dev), window_size=window_size, L=1.0).detach().cpu()
+                ssim_hat_u = float(
+                    pooled_ssim(u_hat, u_dev, window_size=window_size, L=1.0).detach().cpu()
                 )
+                ssim_hat_v = float(
+                    pooled_ssim(u_hat, v, window_size=window_size, L=1.0).detach().cpu()
+                )
+                rec["ssim_hat_vs_clean"] = ssim_hat_u
+                rec["ssim_vs_clean"] = ssim_hat_u
+                rec["ssim_hat_vs_noisy"] = ssim_hat_v
+                rec["psnr_vs_clean"] = psnr_tensor(u_hat, u_dev)
+                if ep == 1:
+                    rec["ssim_clean_vs_noisy"] = ssim_clean_vs_noisy
         history.append(rec)
         if ep == 1 or ep == epochs or ep % max(1, epochs // 10) == 0:
             print(f"epoch {ep}/{epochs} loss={rec['loss']:.6f}", end="")
-            if "psnr_vs_clean" in rec:
+            if u_dev is not None:
+                print(
+                    f" SSIM(û,u)={rec['ssim_hat_vs_clean']:.4f} SSIM(û,v)={rec['ssim_hat_vs_noisy']:.4f}",
+                    end="",
+                )
                 print(f" PSNR(u,û)={rec['psnr_vs_clean']:.2f} dB", end="")
             print()
 
@@ -124,16 +144,26 @@ def train(
     torch.save(model.state_dict(), out_dir / "autoencoder.pt")
 
     metrics_path = stats_dir / "metrics.json"
-    final = {
+    final: dict[str, object] = {
         "epochs": epochs,
+        "window_size": window_size,
+        "lambda_residual": lambda_residual,
+        "epsilon": epsilon,
         "final_loss": history[-1]["loss"] if history else None,
         "noisy_path": str(noisy_path.resolve()),
         "out_denoised": str(out_tif.resolve()),
         "history_tail": history[-5:] if len(history) > 5 else history,
     }
     if u is not None:
-        final["psnr_vs_clean"] = history[-1].get("psnr_vs_clean")
-        final["ssim_vs_clean"] = history[-1].get("ssim_vs_clean")
+        last = history[-1]
+        final["psnr_vs_clean"] = last.get("psnr_vs_clean")
+        final["ssim_hat_vs_clean"] = last.get("ssim_hat_vs_clean")
+        final["ssim_vs_clean"] = last.get("ssim_vs_clean")
+        final["ssim_hat_vs_noisy"] = last.get("ssim_hat_vs_noisy")
+        if ssim_clean_vs_noisy is not None:
+            final["ssim_clean_vs_noisy"] = ssim_clean_vs_noisy
+        if clean_path is not None:
+            final["clean_path"] = str(clean_path.resolve())
     with open(metrics_path, "w", encoding="utf-8") as f:
         json.dump(final, f, indent=2)
     with open(stats_dir / "history.jsonl", "w", encoding="utf-8") as f:
