@@ -1,9 +1,10 @@
-"""CLI entry: preprocess, AE training, and GA evolutionary search."""
+"""CLI entry: preprocess, AE training, GA, and PSO optimization."""
 
 from __future__ import annotations
 import argparse
 import image_enhancement.autoencoders.training as train_mod
 import image_enhancement.genetic_algorithm.ga_runner as ga_mod
+import image_enhancement.particle_swarm_opt.pso_runner as pso_mod
 from image_enhancement.preprocessing import nifti_to_tiff, noisify, noisify_dir, resize
 
 
@@ -23,6 +24,8 @@ def build_parser() -> argparse.ArgumentParser:
     train_mod.add_infer_parser(sub)
     ga_mod.add_optimize_parser(sub)
     ga_mod.add_infer_parser(sub)
+    pso_mod.add_optimize_parser(sub)
+    pso_mod.add_infer_parser(sub)
     return parser
 
 
@@ -49,6 +52,10 @@ def main() -> None:
         ga_mod.optimize_cli(args)
     elif args.command == "infer-ga":
         ga_mod.infer_cli(args)
+    elif args.command == "optimize-pso":
+        pso_mod.optimize_cli(args)
+    elif args.command == "infer-pso":
+        pso_mod.infer_cli(args)
     else:
         raise SystemExit(f"Unknown command: {args.command}")
 

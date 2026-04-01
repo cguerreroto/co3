@@ -8,7 +8,7 @@ Python package for pooled SSIM denoising experiments: NIfTI-to-image preprocessi
 
 ```bash
 cd /<path_to>/co3            # modify <path_to> according to your actual path to this repository
-python -m venv .co3
+python3 -m venv .co3
 source .co3/bin/activate   # Windows: .co3\Scripts\activate
 ```
 
@@ -20,7 +20,7 @@ Run exactly this from the repository root (the folder that contains `pyproject.t
 
 ```bash
 pip install --upgrade pip
-pip install -e .
+pip install -e . # Also: python3 -m pip install --user -e .
 ```
 
 The trailing `.` in `pip install -e .` means “install from the current directory.” Do not omit it.
@@ -190,6 +190,10 @@ python -m image_enhancement.main --help
 python -m image_enhancement.main preprocess --help
 python -m image_enhancement.main train-ae --help
 python -m image_enhancement.main infer-ae --help
+python -m image_enhancement.main optimize-ga --help
+python -m image_enhancement.main infer-ga --help
+python -m image_enhancement.main optimize-pso --help
+python -m image_enhancement.main infer-pso --help
 ```
 
 Preprocess subcommands each have their own options:
@@ -252,11 +256,44 @@ image-enhancement infer-ga -c output/ga_hybrid/ga_solution.npz -v assets/slices_
 
 GA metrics mirror the AE metrics as much as possible: `ssim_hat_vs_clean`, `ssim_hat_vs_noisy`, `ssim_clean_vs_noisy`, `mse_vs_clean`, and `psnr_vs_clean`, plus GA-specific settings such as `patch_size`, population size, generations, crossover probability, and mutation probability.
 
+---
+### `optimize-pso` / `infer-pso`
+
+The PSO implementation mirrors the current GA scope:
+
+- it supports single-image denoising first
+- it uses the same patchwise image representation as GA
+- it reuses the shared `blind_ssim` and `hybrid_ssim_mse` objectives
+- it writes outputs under `output/pso/`
+
+PSO optimization commands:
+
+```bash
+# Option A. Blind local-SSIM objective on one image
+image-enhancement optimize-pso -v assets/slices_noise_vol/slice_noisy_257.tif -u assets/slices_vol/slice_257.tif -o output/pso --iterations 60 --swarm-size 24 --patch-size 8 --loss-mode blind_ssim
+
+# Option B. Hybrid SSIM + MSE on one image
+image-enhancement optimize-pso -v assets/slices_noise_vol/slice_noisy_257.tif -u assets/slices_vol/slice_257.tif -o output/pso_hybrid --iterations 60 --swarm-size 24 --patch-size 8 --loss-mode hybrid_ssim_mse --alpha 0.8 --beta 0.2
+```
+
+Inference commands:
+
+```bash
+# Option A. Reconstruct and evaluate the saved PSO solution
+image-enhancement infer-pso -c output/pso/pso_solution.npz -v assets/slices_noise_vol/slice_noisy_257.tif -u assets/slices_vol/slice_257.tif -o output/pso/infer_holdout
+
+# Option B. Reconstruct and evaluate the saved PSO hybrid solution
+image-enhancement infer-pso -c output/pso_hybrid/pso_solution.npz -v assets/slices_noise_vol/slice_noisy_257.tif -u assets/slices_vol/slice_257.tif -o output/pso_hybrid/infer_holdout
+```
+
+PSO metrics mirror GA and AE as closely as possible: `ssim_hat_vs_clean`, `ssim_hat_vs_noisy`, `ssim_clean_vs_noisy`, `mse_vs_clean`, and `psnr_vs_clean`, plus PSO-specific settings such as `patch_size`, swarm size, iterations, inertia, cognitive coefficient, social coefficient, initialization noise, and maximum velocity.
+
 ## Package layout
 
 - `src/image_enhancement/preprocessing/`: NIfTI export (slice ranges, optional glob), single-file and batch (`noisify-dir`) AWGN, resize
 - `src/image_enhancement/common/`: pooled SSIM loss, shared objectives, constraints
 - `src/image_enhancement/autoencoders/`: `model.py`, `training.py` (blind SSIM or hybrid SSIM+MSE)
 - `src/image_enhancement/genetic_algorithm/`: patchwise GA denoising (`ga_runner.py`, `optimize-ga`, `infer-ga`)
+- `src/image_enhancement/particle_swarm_opt/`: patchwise PSO denoising (`pso_runner.py`, `optimize-pso`, `infer-pso`)
 
 Autoencoder checkpoints and logs are written under `output/ae/images/`, `output/ae/stats/` (`metrics.json`, `history.jsonl`), and `output/ae/autoencoder.pt`.

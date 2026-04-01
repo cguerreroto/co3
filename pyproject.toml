@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "image-enhancement"
 version = "0.1.0"
-description = "SSIM-only denoising: preprocessing and optimization methods"
+description = "Image denoising experiments with preprocessing, autoencoders, GA, and PSO"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
