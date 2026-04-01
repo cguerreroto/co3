@@ -15,6 +15,7 @@ from torch import optim
 from image_enhancement.autoencoders.model import DenoisingAutoencoder
 from image_enhancement.common.constraints import residual_energy_penalty
 from image_enhancement.common.image_io import read_grayscale_01, save_uint8_grayscale
+from image_enhancement.common.performance import PerformanceTracker
 from image_enhancement.common.ssim_loss import PooledSSIMLoss, pooled_ssim
 from image_enhancement.preprocessing.noisify_dir import iter_clean_images
 
@@ -208,6 +209,7 @@ def _eval_aggregate(
     pairs: list[tuple[Path, Path | None]],
     dev: torch.device,
     window_size: int,
+    tracker: PerformanceTracker | None = None,
 ) -> dict[str, float] | None:
     """Average evaluation metrics over pairs that have clean references."""
     rows: list[dict[str, float]] = []
@@ -224,6 +226,8 @@ def _eval_aggregate(
             u = _to_tensor_hw1(u_np).to(dev)
             u_hat = model(v)
             rows.append(compute_eval_metrics(u_hat, v, u=u, window_size=window_size))
+            if tracker is not None:
+                tracker.sample()
     if not rows:
         return None
     keys = rows[0].keys()
@@ -256,6 +260,7 @@ def train_multi(
     torch.manual_seed(seed)
     np.random.seed(seed)
     random.seed(seed)
+    tracker = PerformanceTracker()
 
     if not pairs:
         raise ValueError("pairs must be non-empty")
@@ -315,16 +320,17 @@ def train_multi(
             opt.step()
             epoch_loss += float(loss.detach().cpu())
             n_steps += 1
+            tracker.sample()
 
         avg_loss = epoch_loss / max(1, n_steps)
         rec: dict[str, float | int] = {"epoch": int(ep), "loss": float(avg_loss)}
-        agg = _eval_aggregate(model, pairs, dev, window_size)
+        agg = _eval_aggregate(model, pairs, dev, window_size, tracker=tracker)
         if agg is not None:
             rec.update({k: float(v) for k, v in agg.items()})
             if "ssim_hat_vs_clean" in rec:
                 rec["ssim_vs_clean"] = float(rec["ssim_hat_vs_clean"])
         if val_pairs:
-            val_agg = _eval_aggregate(model, val_pairs, dev, window_size)
+            val_agg = _eval_aggregate(model, val_pairs, dev, window_size, tracker=tracker)
             if val_agg is not None:
                 for k, v in val_agg.items():
                     rec[f"val_{k}"] = float(v)
@@ -348,6 +354,7 @@ def train_multi(
     v = _to_tensor_hw1(v_np).to(dev)
     with torch.no_grad():
         u_hat = model(v)
+    tracker.sample()
     sample_path = img_dir / "denoised_sample.tif"
     den_u8 = (u_hat.squeeze().cpu().numpy() * 255.0).clip(0, 255).astype(np.uint8)
     save_uint8_grayscale(sample_path, den_u8)
@@ -380,6 +387,7 @@ def train_multi(
             final[k] = last[k]
     if "ssim_hat_vs_clean" in last:
         final["ssim_vs_clean"] = last.get("ssim_hat_vs_clean")
+    final.update(tracker.metrics())
 
     with open(stats_dir / "metrics.json", "w", encoding="utf-8") as f:
         json.dump(final, f, indent=2)
@@ -420,6 +428,7 @@ def train(
 
     torch.manual_seed(seed)
     np.random.seed(seed)
+    tracker = PerformanceTracker()
 
     out_dir = Path(out_dir)
     img_dir = out_dir / "images"
@@ -477,6 +486,7 @@ def train(
             total = total + lambda_residual * residual_energy_penalty(v, u_hat, epsilon)
         total.backward()
         opt.step()
+        tracker.sample()
 
         rec: dict[str, float | int] = {"epoch": int(ep), "loss": float(loss.detach().cpu())}
         if u_dev is not None:
@@ -484,6 +494,7 @@ def train(
                 rec.update(compute_eval_metrics(u_hat, v, u=u_dev, window_size=window_size))
                 if ep == 1:
                     rec["ssim_clean_vs_noisy"] = ssim_clean_vs_noisy
+                tracker.sample()
         history.append(rec)
         if ep == 1 or ep == epochs or ep % max(1, epochs // 10) == 0:
             print(f"epoch {ep}/{epochs} loss={rec['loss']:.6f}", end="")
@@ -500,6 +511,7 @@ def train(
     model.eval()
     with torch.no_grad():
         u_hat = model(v)
+    tracker.sample()
     out_tif = img_dir / "denoised.tif"
     den_u8 = (u_hat.squeeze().cpu().numpy() * 255.0).clip(0, 255).astype(np.uint8)
     save_uint8_grayscale(out_tif, den_u8)
@@ -530,6 +542,7 @@ def train(
             final["ssim_clean_vs_noisy"] = ssim_clean_vs_noisy
         if clean_path is not None:
             final["clean_path"] = str(clean_path.resolve())
+    final.update(tracker.metrics())
     with open(stats_dir / "metrics.json", "w", encoding="utf-8") as f:
         json.dump(final, f, indent=2)
     with open(stats_dir / "history.jsonl", "w", encoding="utf-8") as f:
@@ -549,6 +562,7 @@ def infer_ae(
     device: str | None = None,
 ) -> dict[str, Any]:
     """Load weights, denoise one noisy image, write TIFF and optional metrics vs clean."""
+    tracker = PerformanceTracker()
     dev = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
     model = DenoisingAutoencoder().to(dev)
     state = torch.load(checkpoint, map_location=dev)
@@ -559,6 +573,7 @@ def infer_ae(
     v = _to_tensor_hw1(v_np).to(dev)
     with torch.no_grad():
         u_hat = model(v)
+    tracker.sample()
 
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -588,6 +603,7 @@ def infer_ae(
         metrics["mse_vs_clean"] = mse_tensor(u_hat, u)
         metrics["psnr_vs_clean"] = psnr_tensor(u_hat, u)
         metrics["clean_path"] = str(clean_path.resolve())
+    metrics.update(tracker.metrics())
     with open(out_dir / "infer_metrics.json", "w", encoding="utf-8") as f:
         json.dump(metrics, f, indent=2)
     return metrics

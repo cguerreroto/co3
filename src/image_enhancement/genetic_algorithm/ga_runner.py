@@ -10,6 +10,7 @@ import numpy as np
 from deap import base, creator, tools
 from image_enhancement.common.image_io import read_grayscale_01, save_uint8_grayscale
 from image_enhancement.common.objectives import evaluate_objective
+from image_enhancement.common.performance import PerformanceTracker
 
 
 def _load_gray_01(path: Path) -> np.ndarray:
@@ -99,6 +100,7 @@ def optimize_ga(
     seed: int = 42,
 ) -> dict[str, Any]:
     """Run a patchwise GA evolutionary search and save the best result/metrics."""
+    tracker = PerformanceTracker()
     random.seed(seed)
     np.random.seed(seed)
 
@@ -163,6 +165,7 @@ def optimize_ga(
         invalid = [ind for ind in pop if not ind.fitness.valid]
         for ind, fit in zip(invalid, map(toolbox.evaluate, invalid)):
             ind.fitness.values = fit
+        tracker.sample()
 
         best = tools.selBest(pop, 1)[0]
         best_img = _patch_genome_to_image(np.asarray(best, dtype=np.float32), image_shape, patch_size)
@@ -182,6 +185,7 @@ def optimize_ga(
         }
         rec.update({k: float(vv) for k, vv in best_metrics.items()})
         history.append(rec)
+        tracker.sample()
         if gen == 1 or gen == generations or gen % max(1, generations // 10) == 0:
             print(f"gen {gen}/{generations} loss={rec['loss']:.6f}", end="")
             if "ssim_hat_vs_clean" in rec:
@@ -208,6 +212,7 @@ def optimize_ga(
 
     best = tools.selBest(pop, 1)[0]
     best_img = _patch_genome_to_image(np.asarray(best, dtype=np.float32), image_shape, patch_size)
+    tracker.sample()
     out_tif = img_dir / "denoised.tif"
     save_uint8_grayscale(out_tif, (best_img * 255.0).clip(0, 255).astype(np.uint8))
     np.savez_compressed(
@@ -253,6 +258,7 @@ def optimize_ga(
         ):
             if key in last:
                 final[key if key != "loss" else "final_loss"] = last[key]
+    final.update(tracker.metrics())
     with open(stats_dir / "metrics.json", "w", encoding="utf-8") as f:
         json.dump(final, f, indent=2)
     with open(stats_dir / "history.jsonl", "w", encoding="utf-8") as f:
@@ -269,6 +275,7 @@ def infer_ga(
     clean_path: Path | None = None,
 ) -> dict[str, Any]:
     """Reconstruct the saved GA best individual and write metrics/image."""
+    tracker = PerformanceTracker()
     data = np.load(checkpoint, allow_pickle=True)
     genome = np.asarray(data["genome"], dtype=np.float32)
     image_shape = tuple(int(x) for x in data["image_shape"])
@@ -283,6 +290,7 @@ def infer_ga(
         raise ValueError(f"Input noisy image shape {v.shape} != checkpoint shape {image_shape}")
     u = _load_gray_01(clean_path) if clean_path is not None else None
     u_hat = _patch_genome_to_image(genome, image_shape, patch_size)
+    tracker.sample()
 
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -309,6 +317,7 @@ def infer_ga(
     rec.update(metrics)
     if clean_path is not None:
         rec["clean_path"] = str(clean_path.resolve())
+    rec.update(tracker.metrics())
     with open(out_dir / "infer_metrics.json", "w", encoding="utf-8") as f:
         json.dump(rec, f, indent=2)
     return rec

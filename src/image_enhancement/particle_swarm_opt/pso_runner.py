@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import time
 from pathlib import Path
 from typing import Any
 
@@ -12,6 +11,7 @@ import numpy as np
 
 from image_enhancement.common.image_io import read_grayscale_01, save_uint8_grayscale
 from image_enhancement.common.objectives import evaluate_objective
+from image_enhancement.common.performance import PerformanceTracker
 
 
 def _load_gray_01(path: Path) -> np.ndarray:
@@ -104,7 +104,8 @@ def optimize_pso(
     window_size: int = 11,
     seed: int = 42,
 ) -> dict[str, Any]:
-    """Run PSO search over a patchwise image genome and save outputs."""
+    """Run PSO search over a patchwise image position and save outputs."""
+    tracker = PerformanceTracker()
     rng = np.random.default_rng(seed)
 
     v = _load_gray_01(noisy_path)
@@ -152,7 +153,6 @@ def optimize_pso(
     global_best_loss = float(personal_best_loss[best_idx])
 
     history: list[dict[str, float | int]] = []
-    t0 = time.time()
 
     for it in range(1, iterations + 1):
         r1 = rng.random(size=(swarm_size, dim), dtype=np.float32)
@@ -176,6 +176,7 @@ def optimize_pso(
             beta=beta,
             window_size=window_size,
         )
+        tracker.sample()
 
         improved = losses < personal_best_loss
         personal_best_pos[improved] = positions[improved]
@@ -204,6 +205,7 @@ def optimize_pso(
         }
         rec.update({k: float(vv) for k, vv in best_metrics.items()})
         history.append(rec)
+        tracker.sample()
 
         if it == 1 or it == iterations or it % max(1, iterations // 10) == 0:
             print(f"iter {it}/{iterations} loss={rec['best_loss']:.6f}", end="")
@@ -218,8 +220,8 @@ def optimize_pso(
                     print(f" PSNR={rec['psnr_vs_clean']:.2f} dB", end="")
             print()
 
-    elapsed = time.time() - t0
     best_img = _patch_position_to_image(global_best_pos, image_shape, patch_size)
+    tracker.sample()
     out_tif = img_dir / "denoised.tif"
     save_uint8_grayscale(out_tif, (best_img * 255.0).clip(0, 255).astype(np.uint8))
     np.savez_compressed(
@@ -261,7 +263,6 @@ def optimize_pso(
         "init_noise": init_noise,
         "velocity_max": velocity_max,
         "seed": seed,
-        "runtime_sec": elapsed,
         "history_tail": history[-5:] if len(history) > 5 else history,
     }
     if history:
@@ -277,6 +278,7 @@ def optimize_pso(
         ):
             if key in last:
                 final[key] = last[key]
+    final.update(tracker.metrics())
     with open(stats_dir / "metrics.json", "w", encoding="utf-8") as f:
         json.dump(final, f, indent=2)
     with open(stats_dir / "history.jsonl", "w", encoding="utf-8") as f:
@@ -293,6 +295,7 @@ def infer_pso(
     clean_path: Path | None = None,
 ) -> dict[str, Any]:
     """Reconstruct the saved PSO best particle and write metrics/image."""
+    tracker = PerformanceTracker()
     data = np.load(checkpoint, allow_pickle=True)
     particle = np.asarray(data["particle"], dtype=np.float32)
     image_shape = tuple(int(x) for x in data["image_shape"])
@@ -307,6 +310,7 @@ def infer_pso(
         raise ValueError(f"Input noisy image shape {v.shape} != checkpoint shape {image_shape}")
     u = _load_gray_01(clean_path) if clean_path is not None else None
     u_hat = _patch_position_to_image(particle, image_shape, patch_size)
+    tracker.sample()
 
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -333,6 +337,7 @@ def infer_pso(
     rec.update(metrics)
     if clean_path is not None:
         rec["clean_path"] = str(clean_path.resolve())
+    rec.update(tracker.metrics())
     with open(out_dir / "infer_metrics.json", "w", encoding="utf-8") as f:
         json.dump(rec, f, indent=2)
     return rec

@@ -222,8 +222,10 @@ When you pass `--clean` / `-u` (single mode) or use multi-pair mode with clean r
 | `ssim_clean_vs_noisy` | Pooled SSIM $(u,v)$. Noise difficulty baseline (also on epoch 1 in `history.jsonl`) |
 | `mse_vs_clean` | MSE $(\hat{u},u)$. Raw pixelwise error to the clean target |
 | `psnr_vs_clean` | PSNR $(u,\hat{u})$. Classical baseline (monotone in MSE) |
+| `runtime_sec` | Wall-clock runtime for the full training or inference run |
+| `peak_rss_bytes` | Peak resident process memory observed during the run |
 
-`metrics.json` also records `loss_mode`, `alpha`, `beta`, `window_size`, `lambda_residual`, `epsilon`, and paths. In blind mode, PSNR is often enough as a classical scalar alongside SSIM; in hybrid experiments it is useful to inspect raw `mse_vs_clean` directly because it is part of the optimized objective.
+`metrics.json` also records `loss_mode`, `alpha`, `beta`, `window_size`, `lambda_residual`, `epsilon`, paths, `runtime_sec`, and `peak_rss_bytes`. In blind mode, PSNR is often enough as a classical scalar alongside SSIM; in hybrid experiments it is useful to inspect raw `mse_vs_clean` directly because it is part of the optimized objective.
 
 ---
 ### `optimize-ga` / `infer-ga`
@@ -254,7 +256,7 @@ image-enhancement infer-ga -c output/ga/ga_solution.npz -v assets/slices_noise_v
 image-enhancement infer-ga -c output/ga_hybrid/ga_solution.npz -v assets/slices_noise_vol/slice_noisy_257.tif -u assets/slices_vol/slice_257.tif -o output/ga_hybrid/infer_holdout
 ```
 
-GA metrics mirror the AE metrics as much as possible: `ssim_hat_vs_clean`, `ssim_hat_vs_noisy`, `ssim_clean_vs_noisy`, `mse_vs_clean`, and `psnr_vs_clean`, plus GA-specific settings such as `patch_size`, population size, generations, crossover probability, and mutation probability.
+GA metrics mirror the AE metrics as much as possible: `ssim_hat_vs_clean`, `ssim_hat_vs_noisy`, `ssim_clean_vs_noisy`, `mse_vs_clean`, `psnr_vs_clean`, `runtime_sec`, and `peak_rss_bytes`, plus GA-specific settings such as `patch_size`, population size, generations, crossover probability, and mutation probability.
 
 ---
 ### `optimize-pso` / `infer-pso`
@@ -286,12 +288,12 @@ image-enhancement infer-pso -c output/pso/pso_solution.npz -v assets/slices_nois
 image-enhancement infer-pso -c output/pso_hybrid/pso_solution.npz -v assets/slices_noise_vol/slice_noisy_257.tif -u assets/slices_vol/slice_257.tif -o output/pso_hybrid/infer_holdout
 ```
 
-PSO metrics mirror GA and AE as closely as possible: `ssim_hat_vs_clean`, `ssim_hat_vs_noisy`, `ssim_clean_vs_noisy`, `mse_vs_clean`, and `psnr_vs_clean`, plus PSO-specific settings such as `patch_size`, swarm size, iterations, inertia, cognitive coefficient, social coefficient, initialization noise, and maximum velocity.
+PSO metrics mirror GA and AE as closely as possible: `ssim_hat_vs_clean`, `ssim_hat_vs_noisy`, `ssim_clean_vs_noisy`, `mse_vs_clean`, `psnr_vs_clean`, `runtime_sec`, and `peak_rss_bytes`, plus PSO-specific settings such as `patch_size`, swarm size, iterations, inertia, cognitive coefficient, social coefficient, initialization noise, and maximum velocity.
 
 ## Package layout
 
 - `src/image_enhancement/preprocessing/`: NIfTI export (slice ranges, optional glob), single-file and batch (`noisify-dir`) AWGN, resize
-- `src/image_enhancement/common/`: pooled SSIM loss, shared objectives, constraints
+- `src/image_enhancement/common/`: pooled SSIM loss, shared objectives, performance tracking, constraints
 - `src/image_enhancement/autoencoders/`: `model.py`, `training.py` (blind SSIM or hybrid SSIM+MSE)
 - `src/image_enhancement/genetic_algorithm/`: patchwise GA denoising (`ga_runner.py`, `optimize-ga`, `infer-ga`)
 - `src/image_enhancement/particle_swarm_opt/`: patchwise PSO denoising (`pso_runner.py`, `optimize-pso`, `infer-pso`)

@@ -6,6 +6,7 @@ from image_enhancement.common.objectives import (
     mse_tensor,
     psnr_tensor,
 )
+from image_enhancement.common.performance import PerformanceTracker, peak_rss_bytes
 
 __all__ = [
     "PooledSSIMLoss",
@@ -16,4 +17,6 @@ __all__ = [
     "evaluate_objective",
     "mse_tensor",
     "psnr_tensor",
+    "PerformanceTracker",
+    "peak_rss_bytes",
 ]
