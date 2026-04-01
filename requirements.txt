@@ -1,0 +1,8 @@
+# Install package in editable mode: pip install -e .
+# Or minimal flat install:
+numpy>=1.24
+nibabel>=5.0
+tifffile>=2023.1
+imageio>=2.34
+torch>=2.0
+deap>=1.4
