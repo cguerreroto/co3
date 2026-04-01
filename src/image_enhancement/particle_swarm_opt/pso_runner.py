@@ -28,7 +28,7 @@ def _pad_to_patch_grid(arr: np.ndarray, patch_size: int) -> tuple[np.ndarray, tu
     return out, (pad_h, pad_w)
 
 
-def _image_to_patch_genome(arr: np.ndarray, patch_size: int) -> np.ndarray:
+def _image_to_patch_position(arr: np.ndarray, patch_size: int) -> np.ndarray:
     padded, _pads = _pad_to_patch_grid(arr, patch_size)
     h, w = padded.shape
     patches = (
@@ -39,8 +39,8 @@ def _image_to_patch_genome(arr: np.ndarray, patch_size: int) -> np.ndarray:
     return patches.reshape(-1).astype(np.float32)
 
 
-def _patch_genome_to_image(
-    genome: np.ndarray,
+def _patch_position_to_image(
+    position: np.ndarray,
     image_shape: tuple[int, int],
     patch_size: int,
 ) -> np.ndarray:
@@ -49,9 +49,9 @@ def _patch_genome_to_image(
     padded_w = ((w + patch_size - 1) // patch_size) * patch_size
     n_patches = (padded_h // patch_size) * (padded_w // patch_size)
     expected = n_patches * patch_size * patch_size
-    if genome.size != expected:
-        raise ValueError(f"Particle length {genome.size} != expected {expected}")
-    patches = genome.reshape(n_patches, patch_size, patch_size)
+    if position.size != expected:
+        raise ValueError(f"Particle length {position.size} != expected {expected}")
+    patches = position.reshape(n_patches, patch_size, patch_size)
     grid = patches.reshape(padded_h // patch_size, padded_w // patch_size, patch_size, patch_size)
     image = grid.transpose(0, 2, 1, 3).reshape(padded_h, padded_w)
     return np.clip(image[:h, :w], 0.0, 1.0).astype(np.float32)
@@ -71,7 +71,7 @@ def _evaluate_particles(
 ) -> np.ndarray:
     losses = np.empty(positions.shape[0], dtype=np.float32)
     for idx, pos in enumerate(positions):
-        u_hat = _patch_genome_to_image(pos, image_shape, patch_size)
+        u_hat = _patch_position_to_image(pos, image_shape, patch_size)
         loss, _metrics = evaluate_objective(
             u_hat,
             v=v,
@@ -120,8 +120,8 @@ def optimize_pso(
     if patch_size <= 0:
         raise ValueError("patch_size must be positive")
 
-    base_genome = _image_to_patch_genome(v, patch_size)
-    dim = base_genome.size
+    base_position = _image_to_patch_position(v, patch_size)
+    dim = base_position.size
     image_shape = tuple(v.shape)
 
     out_dir = Path(out_dir)
@@ -130,7 +130,7 @@ def optimize_pso(
     img_dir.mkdir(parents=True, exist_ok=True)
     stats_dir.mkdir(parents=True, exist_ok=True)
 
-    positions = np.repeat(base_genome[None, :], swarm_size, axis=0)
+    positions = np.repeat(base_position[None, :], swarm_size, axis=0)
     positions += rng.uniform(-init_noise, init_noise, size=positions.shape).astype(np.float32)
     positions = np.clip(positions, 0.0, 1.0).astype(np.float32)
 
@@ -186,7 +186,7 @@ def optimize_pso(
             global_best_loss = float(personal_best_loss[best_idx])
             global_best_pos = personal_best_pos[best_idx].copy()
 
-        best_img = _patch_genome_to_image(global_best_pos, image_shape, patch_size)
+        best_img = _patch_position_to_image(global_best_pos, image_shape, patch_size)
         best_loss, best_metrics = evaluate_objective(
             best_img,
             v=v,
@@ -219,7 +219,7 @@ def optimize_pso(
             print()
 
     elapsed = time.time() - t0
-    best_img = _patch_genome_to_image(global_best_pos, image_shape, patch_size)
+    best_img = _patch_position_to_image(global_best_pos, image_shape, patch_size)
     out_tif = img_dir / "denoised.tif"
     save_uint8_grayscale(out_tif, (best_img * 255.0).clip(0, 255).astype(np.uint8))
     np.savez_compressed(
@@ -306,7 +306,7 @@ def infer_pso(
     if tuple(v.shape) != image_shape:
         raise ValueError(f"Input noisy image shape {v.shape} != checkpoint shape {image_shape}")
     u = _load_gray_01(clean_path) if clean_path is not None else None
-    u_hat = _patch_genome_to_image(particle, image_shape, patch_size)
+    u_hat = _patch_position_to_image(particle, image_shape, patch_size)
 
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
