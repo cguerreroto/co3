@@ -1,0 +1,402 @@
+GA note: how the current implementation converts an image into a chromosome
+
+Source implementation:
+- src/image_enhancement/genetic_algorithm/ga_runner.py
+
+Current default values used by the package:
+- patch_size = 8
+- population_size = 30
+- generations = 40
+- crossover_prob = 0.7
+- mutation_prob = 0.3
+- mutation_sigma = 0.05
+- loss_mode = blind_ssim
+- alpha = 0.8
+- beta = 0.2
+- window_size = 11
+- seed = 42
+
+Important idea:
+- The current GA does NOT optimize each patch independently.
+- It optimizes the whole image as one individual.
+- Patches are only the internal structure of the chromosome.
+
+------------------------------------------------------------
+1. Example image
+------------------------------------------------------------
+
+Suppose the noisy image v is 32x32.
+To keep the drawing readable, show only the first rows symbolically:
+
+noisy image v =
+  a0 b0 c0 d0 e0 f0 g0 h0 ...
+  a1 b1 c1 d1 e1 f1 g1 h1 ...
+  a2 b2 c2 d2 e2 f2 g2 h2 ...
+  ...
+
+Suppose the clean image u is:
+
+clean image u =
+  A0 B0 C0 D0 E0 F0 G0 H0 ...
+  A1 B1 C1 D1 E1 F1 G1 H1 ...
+  A2 B2 C2 D2 E2 F2 G2 H2 ...
+  ...
+
+At the end, the GA tries to produce a denoised image u_hat such as:
+
+final candidate u_hat =
+  x0 y0 z0 t0 r0 s0 q0 p0 ...
+  x1 y1 z1 t1 r1 s1 q1 p1 ...
+  x2 y2 z2 t2 r2 s2 q2 p2 ...
+  ...
+
+Here x0, y0, ... are candidate denoised pixel values.
+They are expected to move away from the noisy symbols a0, b0, ... and, in supervised mode, closer to A0, B0, ...
+
+In the default GA run, patch_size = 8.
+Therefore a 32x32 image is divided into 4 x 4 = 16 non-overlapping patches.
+
+Layout of patches:
+
+  +-------+-------+-------+-------+
+  |  P1   |  P2   |  P3   |  P4   |
+  +-------+-------+-------+-------+
+  |  P5   |  P6   |  P7   |  P8   |
+  +-------+-------+-------+-------+
+  |  P9   | P10   | P11   | P12   |
+  +-------+-------+-------+-------+
+  | P13   | P14   | P15   | P16   |
+  +-------+-------+-------+-------+
+
+Each patch is 8x8 pixels.
+
+------------------------------------------------------------
+2. Step 1: image -> patches
+------------------------------------------------------------
+
+The noisy image v is split into non-overlapping 8x8 blocks:
+
+P1 = rows 0..7, cols 0..7
+P2 = rows 0..7, cols 8..15
+P3 = rows 0..7, cols 16..23
+P4 = rows 0..7, cols 24..31
+...
+P16 = rows 24..31, cols 24..31
+
+So the image is still one image, but internally the code now knows:
+
+v -> [P1, P2, P3, ..., P16]
+
+------------------------------------------------------------
+3. Step 2: each patch -> one chromosome segment
+------------------------------------------------------------
+
+Each 8x8 patch is flattened into a 1D vector of length 64.
+
+For example:
+
+P1 =
+  a0 b0 c0 d0 e0 f0 g0 h0
+  a1 b1 c1 d1 e1 f1 g1 h1
+  ...
+  a7 b7 c7 d7 e7 f7 g7 h7
+
+segment S1 =
+  [a0, b0, c0, d0, e0, f0, g0, h0,
+   a1, b1, c1, d1, e1, f1, g1, h1,
+   ...,
+   a7, b7, c7, d7, e7, f7, g7, h7]
+
+Likewise:
+- P2 -> S2
+- P3 -> S3
+- ...
+- P16 -> S16
+
+------------------------------------------------------------
+4. Step 3: all segments are concatenated into one chromosome
+------------------------------------------------------------
+
+One chromosome is:
+
+chromosome =
+  [S1 | S2 | S3 | S4 | S5 | ... | S16]
+
+Since each segment has length 64 and there are 16 segments:
+
+chromosome length = 16 x 64 = 1024
+
+This means:
+- one chromosome = one full candidate denoised image
+- one segment = one patch of that image
+
+This is the key point:
+- The GA does NOT create one chromosome per patch.
+- It creates one chromosome for the whole image.
+
+------------------------------------------------------------
+5. Step 4: initial population
+------------------------------------------------------------
+
+The code starts from the noisy image chromosome and creates the initial population
+by adding Gaussian noise to it.
+
+So if the noisy-image chromosome is:
+
+base = [S1v | S2v | S3v | ... | S16v]
+
+then the initial individuals look like:
+
+ind1 = base + small_noise
+ind2 = base + small_noise
+ind3 = base + small_noise
+...
+ind30 = base + small_noise
+
+Therefore:
+- population_size = 30 means 30 candidate full images
+- not 30 swarms
+- not 30 patches
+
+What one initial candidate image may look like after reconstruction:
+
+candidate at generation 0 =
+  a0' b0' c0' d0' e0' f0' g0' h0' ...
+  a1' b1' c1' d1' e1' f1' g1' h1' ...
+  a2' b2' c2' d2' e2' f2' g2' h2' ...
+  ...
+
+The prime symbol means: close to the noisy value, but slightly perturbed.
+
+------------------------------------------------------------
+6. Step 5: what are the parents?
+------------------------------------------------------------
+
+After tournament selection, the GA chooses two parent chromosomes.
+
+Example:
+
+parent 1 = [S1A | S2A | S3A | S4A | ... | S16A]
+parent 2 = [S1B | S2B | S3B | S4B | ... | S16B]
+
+Here:
+- A means segment from parent 1
+- B means segment from parent 2
+
+These are not the clean and noisy images.
+They are two candidate denoised images from the current population.
+
+Example parent images:
+
+parent 1 image =
+  m0 n0 o0 p0 q0 r0 s0 t0 ...
+  m1 n1 o1 p1 q1 r1 s1 t1 ...
+  ...
+
+parent 2 image =
+  u0 v0 w0 x0 y0 z0 k0 l0 ...
+  u1 v1 w1 x1 y1 z1 k1 l1 ...
+  ...
+
+------------------------------------------------------------
+7. Step 6: crossover
+------------------------------------------------------------
+
+The current implementation uses patchwise swap crossover.
+
+For each segment position p:
+- with probability 0.5, the whole segment is swapped between the two parents
+
+Example:
+
+before crossover:
+  parent 1 = [S1A | S2A | S3A | S4A]
+  parent 2 = [S1B | S2B | S3B | S4B]
+
+after crossover:
+  child 1  = [S1A | S2B | S3A | S4B]
+  child 2  = [S1B | S2A | S3B | S4A]
+
+Important:
+- patch location is preserved
+- S2 swaps only with S2
+- S4 swaps only with S4
+- the code never compares patch 2 with patch 7 during crossover
+
+So crossover means:
+- exchange whole patch blocks at the same spatial position
+
+How the intermediate child image can look:
+
+child image after crossover =
+  m0 n0 o0 p0 | y0 z0 k0 l0 ...
+  m1 n1 o1 p1 | y1 z1 k1 l1 ...
+  -------------------------------
+  rows/patches from parent 1 and parent 2 are mixed by patch block
+
+This is not pixelwise averaging.
+It is block replacement at patch positions.
+
+------------------------------------------------------------
+8. Step 7: mutation
+------------------------------------------------------------
+
+Mutation also works patchwise.
+
+Two levels happen:
+
+1. The whole individual is selected for mutation with probability mutation_prob = 0.3.
+2. Inside that selected individual, each patch segment is mutated with probability indpb = 0.2.
+
+If a segment is selected:
+- each pixel value inside that patch receives Gaussian noise
+- then values are clipped to [0,1]
+
+So mutation is still whole-image mutation, but grouped by patches.
+
+Intermediate mutated image example:
+
+before mutation =
+  m0 n0 o0 p0 q0 r0 s0 t0 ...
+  m1 n1 o1 p1 q1 r1 s1 t1 ...
+  ...
+
+after mutation =
+  m0 n0* o0 p0 q0 r0* s0 t0 ...
+  m1 n1  o1 p1 q1 r1  s1 t1 ...
+  ...
+
+The star means the stored value in that patch segment was perturbed.
+
+------------------------------------------------------------
+9. Step 8: chromosome -> full image again
+------------------------------------------------------------
+
+After crossover and mutation, the chromosome is reconstructed back into a 32x32 image:
+
+[S1 | S2 | S3 | ... | S16]
+   ->
+[P1, P2, P3, ..., P16]
+   ->
+full image u_hat
+
+ASCII view:
+
+chromosome
+  [S1 | S2 | S3 | S4 | ... | S16]
+
+reshape into patches
+  [P1, P2, P3, P4, ..., P16]
+
+rebuild patch grid
+  +-------+-------+-------+-------+
+  |  P1   |  P2   |  P3   |  P4   |
+  +-------+-------+-------+-------+
+  |  P5   |  P6   |  P7   |  P8   |
+  +-------+-------+-------+-------+
+  |  P9   | P10   | P11   | P12   |
+  +-------+-------+-------+-------+
+  | P13   | P14   | P15   | P16   |
+  +-------+-------+-------+-------+
+
+reconstructed image
+  u_hat
+
+------------------------------------------------------------
+10. Step 9: what is compared in the objective?
+------------------------------------------------------------
+
+Option A. blind_ssim (default)
+
+The reconstructed full image u_hat is compared against the noisy image v:
+
+loss = 1 - SSIM(u_hat, v)
+
+Important:
+- SSIM itself is computed by local windows/patches inside the metric
+- but the decision variable is still the whole image u_hat
+
+So the comparison is:
+
+u_hat =
+  x0 y0 z0 t0 r0 s0 q0 p0 ...
+  x1 y1 z1 t1 r1 s1 q1 p1 ...
+  ...
+
+vs
+
+v =
+  a0 b0 c0 d0 e0 f0 g0 h0 ...
+  a1 b1 c1 d1 e1 f1 g1 h1 ...
+  ...
+
+Option B. hybrid_ssim_mse
+
+The reconstructed full image u_hat is compared against the clean image u:
+
+loss = alpha * (1 - SSIM(u_hat, u)) + beta * MSE(u_hat, u)
+
+with defaults:
+- alpha = 0.8
+- beta = 0.2
+
+So the comparison is:
+
+u_hat =
+  x0 y0 z0 t0 r0 s0 q0 p0 ...
+  x1 y1 z1 t1 r1 s1 q1 p1 ...
+  ...
+
+vs
+
+u =
+  A0 B0 C0 D0 E0 F0 G0 H0 ...
+  A1 B1 C1 D1 E1 F1 G1 H1 ...
+  ...
+
+------------------------------------------------------------
+11. What the image looks like during the run
+------------------------------------------------------------
+
+A very simplified symbolic timeline:
+
+start noisy image v
+  a0 b0 c0 d0 e0 ...
+  a1 b1 c1 d1 e1 ...
+
+initial candidate
+  a0' b0' c0' d0' e0' ...
+  a1' b1' c1' d1' e1' ...
+
+middle generation candidate
+  g0 h0 i0 j0 k0 ...
+  g1 h1 i1 j1 k1 ...
+
+final best denoised image u_hat
+  x0 y0 z0 t0 r0 ...
+  x1 y1 z1 t1 r1 ...
+
+The exact symbols are only illustrative.
+The real code stores numeric values in [0,1].
+
+------------------------------------------------------------
+12. Final conceptual summary
+------------------------------------------------------------
+
+Current GA implementation:
+
+noisy image v
+  -> split into non-overlapping patches
+  -> flatten each patch into one segment
+  -> concatenate all segments into one chromosome
+  -> create many full-image chromosomes (population)
+  -> crossover and mutation operate on patch segments
+  -> reconstruct each chromosome into a full image u_hat
+  -> score the full image using the selected objective
+  -> keep the best candidate image found so far
+
+Short answer:
+- patch = one 2D block of the image
+- chromosome segment = flattened version of that patch
+- chromosome = all patch segments concatenated
+- one individual = one whole candidate image

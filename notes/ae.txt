@@ -1,0 +1,264 @@
+AE note: how the current implementation converts an image into a tensor and denoised output
+
+Source implementations:
+- src/image_enhancement/autoencoders/training.py
+- src/image_enhancement/autoencoders/model.py
+
+Current default values used by the package:
+- epochs = 200
+- lr = 1e-3
+- window_size = 11
+- loss_mode = blind_ssim
+- alpha = 0.8
+- beta = 0.2
+- seed = 42
+
+Important idea:
+- The AE does NOT build chromosomes.
+- The AE does NOT build particles or swarms.
+- It takes the whole image as a tensor and feeds it through a neural network.
+
+------------------------------------------------------------
+1. Example image
+------------------------------------------------------------
+
+Suppose the noisy image v is 32x32.
+A symbolic view is:
+
+noisy image v =
+  a0 b0 c0 d0 e0 f0 g0 h0 ...
+  a1 b1 c1 d1 e1 f1 g1 h1 ...
+  a2 b2 c2 d2 e2 f2 g2 h2 ...
+  ...
+
+Suppose the clean image u is:
+
+clean image u =
+  A0 B0 C0 D0 E0 F0 G0 H0 ...
+  A1 B1 C1 D1 E1 F1 G1 H1 ...
+  A2 B2 C2 D2 E2 F2 G2 H2 ...
+  ...
+
+At the end, the AE tries to produce a denoised output u_hat such as:
+
+final output u_hat =
+  x0 y0 z0 t0 r0 s0 q0 p0 ...
+  x1 y1 z1 t1 r1 s1 q1 p1 ...
+  x2 y2 z2 t2 r2 s2 q2 p2 ...
+  ...
+
+------------------------------------------------------------
+2. Step 1: image -> numpy array -> tensor
+------------------------------------------------------------
+
+The noisy image is first read as a grayscale array in [0,1].
+Then it is converted into a tensor with shape:
+
+(1, 1, H, W)
+
+For a 32x32 image this becomes:
+
+(1, 1, 32, 32)
+
+Meaning:
+- first 1 = batch size
+- second 1 = number of channels (grayscale)
+- 32 = height
+- 32 = width
+
+ASCII view:
+
+2D image
+  32 x 32
+
+becomes tensor
+  [batch=1,
+   channel=1,
+   height=32,
+   width=32]
+
+So unlike GA/PSO:
+- the AE keeps the image as a whole grid
+- it does not split the image into explicit chromosome or particle segments
+
+------------------------------------------------------------
+3. Step 2: whole image enters the network
+------------------------------------------------------------
+
+The network is a convolutional autoencoder.
+It applies a sequence of convolution layers and ReLU activations, ending with a sigmoid.
+
+Architecture summary:
+
+input (1 channel)
+  -> Conv2d(1 -> 32)
+  -> ReLU
+  -> Conv2d(32 -> 64)
+  -> ReLU
+  -> Conv2d(64 -> 64)
+  -> ReLU
+  -> Conv2d(64 -> 32)
+  -> ReLU
+  -> Conv2d(32 -> 1)
+  -> Sigmoid
+  -> output (1 channel)
+
+Important:
+- the whole image is processed at once
+- convolutions still look at local neighborhoods
+- but the model output is one full image u_hat
+
+------------------------------------------------------------
+4. Step 3: output image u_hat
+------------------------------------------------------------
+
+The output has the same spatial shape as the input:
+
+input:  (1, 1, 32, 32)
+output: (1, 1, 32, 32)
+
+So the AE maps:
+
+v -> u_hat
+
+ASCII flow:
+
+noisy image v
+   -> tensor (1,1,32,32)
+   -> autoencoder
+   -> tensor (1,1,32,32)
+   -> denoised image u_hat
+
+An early-epoch output might look like:
+
+u_hat at early epoch =
+  a0~ b0~ c0~ d0~ e0~ ...
+  a1~ b1~ c1~ d1~ e1~ ...
+  ...
+
+The tilde means: the network output is still close to the noisy input, but already modified.
+
+------------------------------------------------------------
+5. Step 4: default training objective
+------------------------------------------------------------
+
+Default mode is blind_ssim.
+In that case the loss is:
+
+loss = 1 - SSIM(u_hat, v)
+
+So the network output u_hat is compared against the noisy image v.
+
+Important:
+- SSIM is computed using local windows of size window_size = 11
+- but the model still predicts a whole image
+
+------------------------------------------------------------
+6. Step 5: hybrid mode
+------------------------------------------------------------
+
+If a clean image u is provided and hybrid mode is selected, then the loss becomes:
+
+loss = alpha * (1 - SSIM(u_hat, u)) + beta * MSE(u_hat, u)
+
+with defaults:
+- alpha = 0.8
+- beta = 0.2
+
+So in hybrid mode:
+- the clean image is part of the training loss
+
+In blind mode:
+- the clean image is not used for optimization
+- but it may still be used for evaluation metrics if available
+
+------------------------------------------------------------
+7. Step 6: optimization process
+------------------------------------------------------------
+
+At each epoch:
+
+1. Feed v into the network
+2. Compute u_hat
+3. Compute the loss
+4. Backpropagate gradients
+5. Update network parameters with Adam
+
+ASCII flow:
+
+v
+ -> forward pass
+ -> u_hat
+ -> loss
+ -> backpropagation
+ -> update network weights
+
+So the AE optimizes:
+- network parameters
+not:
+- pixel chromosomes
+- particles
+- patch blocks as independent search units
+
+------------------------------------------------------------
+8. What the image looks like during training
+------------------------------------------------------------
+
+A simplified symbolic timeline:
+
+start noisy image v
+  a0 b0 c0 d0 e0 ...
+  a1 b1 c1 d1 e1 ...
+
+early epoch output
+  a0~ b0~ c0~ d0~ e0~ ...
+  a1~ b1~ c1~ d1~ e1~ ...
+
+middle epoch output
+  g0 h0 i0 j0 k0 ...
+  g1 h1 i1 j1 k1 ...
+
+final denoised output u_hat
+  x0 y0 z0 t0 r0 ...
+  x1 y1 z1 t1 r1 ...
+
+Again, the symbols are illustrative only.
+The real output is a numeric grayscale image with values in [0,1].
+
+------------------------------------------------------------
+9. Step 7: inference
+------------------------------------------------------------
+
+After training, inference is simpler:
+
+checkpoint + noisy image v
+  -> load network weights
+  -> forward pass
+  -> u_hat
+  -> save denoised image
+
+If clean u is available during inference:
+- compute SSIM(u_hat, u)
+- compute MSE(u_hat, u)
+- compute PSNR(u_hat, u)
+- compute SSIM(u_hat, v)
+
+------------------------------------------------------------
+10. Final conceptual summary
+------------------------------------------------------------
+
+Current AE implementation:
+
+noisy image v
+  -> convert to tensor (1,1,H,W)
+  -> feed the whole image into the autoencoder
+  -> produce whole-image output u_hat
+  -> compute SSIM-based or hybrid loss
+  -> update network parameters during training
+  -> save the final denoised image
+
+Short answer:
+- AE does not convert the image into chromosomes
+- AE does not convert the image into particles
+- AE uses the whole image as a tensor input to a neural network
+- local patch behavior appears inside convolutions and SSIM windows, not as explicit GA/PSO-style segments
