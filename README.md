@@ -2,6 +2,24 @@
 
 Python package for pooled SSIM denoising experiments: NIfTI-to-image preprocessing, AWGN noisification, optional resize for genetic algorithm (GA) or particle swarm optimization (PSO) branches, and a convolutional autoencoder trained to minimize $1 - \mathcal{S}(\hat{u}, v)$, where $\mathcal{S}$ is the mean local SSIM between the denoised estimate $\hat{u}$ and the noisy observation $v$.
 
+## Objectives
+
+(shared across methods, selected with `--loss-mode`.)
+
+1. Blind objective. Minimize loss derived from pooled SSIM between $\hat{u}$ and the observation $v$ (equivalently $1 - \mathcal{S}(\hat{u},v)$ on the relevant domain).
+2. Supervised hybrid objective. When paired $(u,v)$ are available, minimize $\alpha\bigl(1 - \mathcal{S}(\hat{u}, u)\bigr) + \beta\,\mathrm{MSE}(\hat{u}, u)$ (`hybrid_ssim_mse`), combining SSIM and MSE against clean $u$.
+
+## Search geometry
+
+(how $\hat{u}$ is built and optimized; this is independent of which objective you select.)
+
+| Geometry | Description | GA-related CLI |
+|----------|-------------|------------------|
+| (A) Global | One search over the entire image at once (single genome or swarm for the full field). | `optimize-ga`, `infer-ga` |
+| (B) Patch-wise | Independent optimization on each overlapping tile, then overlap blending into $\hat{u}_{\mathrm{final}}$. | `optimize-ga-patchwise`, `infer-ga-patchwise` |
+
+PSO (`optimize-pso` / `infer-pso`) uses the same objectives and (A) global geometry as `optimize-ga`. The autoencoder (`train-ae` / `infer-ae`) is a learned global mapper; it is not the patch-wise GA path.
+
 ## Setup
 
 ### 1. Clone or open the repo and create a virtual environment (venv)
@@ -48,12 +66,16 @@ image-enhancement --help
 ## Data layout
 
 - Place inputs under `assets/` (local only; image extensions may be git-ignored).
-- Outputs default to `output/ae/`, `output/ga/`, `output/pso/` for autoencoder, genetic algorithm, and particle swarm runs respectively.
+- Outputs default to `output/ae/`, `output/ga/`, `output/ga_patchwise/`, `output/pso/` for autoencoder, global GA, patch-wise GA, and PSO runs respectively (you may use any directory names; these are typical).
 
 ## Commands
 
+In the script blocks below, comments use two levels: major topics use a line of `#` plus asterisks (10 characters wider than the former `# === ... ===` line), with the title centered; numbered subsections use `#` plus dots (same width), with the subsection title centered on the middle line.
+
 ```bash
-# ----------------------------------------------- convert nifti to tiff (jpg/jpeg/png) -----------------------------------------------
+# ******************************************************
+# ******** convert nifti to tiff (jpg/jpeg/png) ********
+# ******************************************************
 
 # Single slice from NIfTI (axis 1 is often coronal in RAS; inspect with --output-dir first). Output can be .tif/.tiff/.png/.jpg/.jpeg.
 image-enhancement preprocess nifti-to-tiff -i assets/volume.nii.gz -o assets/slice.tif --axis 1 --index 257
@@ -67,7 +89,9 @@ image-enhancement preprocess nifti-to-tiff -i assets/volume.nii.gz --output-dir 
 image-enhancement preprocess nifti-to-tiff --input-glob "assets/*.nii.gz" --output-root assets/slices_by_volume --output-dir assets/_argparse_dummy --axis 1 --index-start 250 --index-end 350
 
 
-# -------------------------------------------------------- Preprocess: noisify --------------------------------------------------------
+# *************************************
+# ******** Preprocess: noisify ********
+# *************************************
 
 # AWGN for one image (u -> v) + JSON sidecar (sigma, epsilon_hint, ...).  Input and output can be .tif/.tiff/.png/.jpg/.jpeg.
 image-enhancement preprocess noisify -i assets/slice.tif -o assets/slice_noisy.tif --sigma 25
@@ -77,10 +101,13 @@ image-enhancement preprocess noisify -i assets/slice.tif -o assets/slice_noisy.t
 # assets/slices_by_volume/... -> assets/slices_noise_by_volume/...
 # filenames are renamed like: slice_257.tif -> slice_noisy_257.tif (+ sidecar .json)
 image-enhancement preprocess noisify-dir --clean-dir assets/slices_vol --noisy-dir assets/slices_noise_vol --sigma 25
+
 image-enhancement preprocess noisify-dir --clean-dir assets/slices_by_volume --noisy-dir assets/slices_noise_by_volume --sigma 25
 
 
-# -------------------------------------------------------- Preprocess: resize --------------------------------------------------------
+# ************************************
+# ******** Preprocess: resize ********
+# ************************************
 
 # Resize for GA/PSO branch (proportional, max side 128). Input and output can be .tif/.tiff/.png/.jpg/.jpeg.
 image-enhancement preprocess resize -i assets/slice.tif -o assets/slice_small.tif --max-side 128
@@ -91,11 +118,13 @@ image-enhancement preprocess resize -i assets/slice.tif -o assets/slice_small.ti
 && image-enhancement preprocess noisify -i assets/slice_small.tif -o assets/slice_small_noisy.tif --sigma 25
 
 
-# ------------------------------------------------------- Autoencoders: training -------------------------------------------------------
+# ****************************************
+# ******** Autoencoders: training ********
+# ****************************************
 
-# .........................................................
-# 1. Single image
-# .........................................................
+#.......................................
+#            1. Single image            
+#.......................................
 
 # One noisy/clean pair only
 # Option A. Default mode: blind_ssim
@@ -111,9 +140,9 @@ image-enhancement train-ae -v assets/slices_noise_by_volume/volume/slice_noisy_2
 image-enhancement train-ae -v assets/slices_noise_by_volume/volume/slice_noisy_257.tif -u assets/slices_by_volume/volume/slice_257.tif -o output/ae \
   --lambda-residual 1e-4 --noise-meta assets/slices_noise_by_volume/volume/slice_noisy_257.tif.json
 
-# .........................................................
-# 2. Group of images in one folder
-# .........................................................
+#.......................................
+#    2. Group of images in one folder   
+#.......................................
 
 # Example: assets/slices_vol <-> assets/slices_noise_vol
 # One optimization step per image per epoch; metrics are epoch means
@@ -125,9 +154,9 @@ image-enhancement train-ae --clean-dir assets/slices_vol --noisy-dir assets/slic
 image-enhancement train-ae --clean-dir assets/slices_vol --noisy-dir assets/slices_noise_vol -o output/ae_hybrid \
   --epochs 50 --shuffle --loss-mode hybrid_ssim_mse --alpha 0.8 --beta 0.2
 
-# .........................................................
+#.......................................
 # 3. Group of images in multiple folders
-# .........................................................
+#.......................................
 
 # Example: assets/slices_by_volume/<volume_name>/... <-> assets/slices_noise_by_volume/<volume_name>/...
 # Option A. Default mode: blind_ssim
@@ -142,10 +171,13 @@ image-enhancement train-ae --clean-dir assets/slices_by_volume --noisy-dir asset
 image-enhancement train-ae --manifest train_pairs.jsonl --exclude-from-train exclude.txt -o output/ae
 
 
-# ------------------------------------------------------- Autoencoders: infer  -------------------------------------------------------
-# .........................................................
-# 1. Single image
-# .........................................................
+# *************************************
+# ******** Autoencoders: infer ********
+# *************************************
+
+#.......................................
+#           1. Single image                                                  
+#.......................................
 
 # Option A. Checkpoint trained with blind_ssim
 image-enhancement infer-ae -c output/ae/autoencoder.pt -v assets/slices_noise_by_volume/volume/slice_noisy_257.tif -u assets/slices_by_volume/volume/slice_257.tif -o output/ae/infer_holdout
@@ -153,9 +185,10 @@ image-enhancement infer-ae -c output/ae/autoencoder.pt -v assets/slices_noise_by
 # Option B. Checkpoint trained with hybrid_ssim_mse
 image-enhancement infer-ae -c output/ae_hybrid/autoencoder.pt -v assets/slices_noise_by_volume/volume/slice_noisy_257.tif -u assets/slices_by_volume/volume/slice_257.tif -o output/ae_hybrid/infer_holdout
 
-# .........................................................
-# 2. Group of images in one folder (if training used assets/slices_vol and assets/slices_noise_vol)
-# .........................................................
+#.......................................
+#   2. Group of images in one folder     
+#.......................................
+# if training used assets/slices_vol and assets/slices_noise_vol  
 
 # Option A. Checkpoint trained with blind_ssim
 image-enhancement infer-ae -c output/ae/autoencoder.pt -v assets/slices_noise_vol/slice_noisy_257.tif -u assets/slices_vol/slice_257.tif -o output/ae/infer_holdout
@@ -163,9 +196,10 @@ image-enhancement infer-ae -c output/ae/autoencoder.pt -v assets/slices_noise_vo
 # Option B. Checkpoint trained with hybrid_ssim_mse
 image-enhancement infer-ae -c output/ae_hybrid/autoencoder.pt -v assets/slices_noise_vol/slice_noisy_257.tif -u assets/slices_vol/slice_257.tif -o output/ae_hybrid/infer_holdout
 
-# .........................................................
-# 3. Group of images in multiple folders (if training used assets/slices_by_volume and assets/slices_noise_by_volume)
-# .........................................................
+#.......................................
+# 3. Group of images in multiple folders 
+#.......................................
+# if training used assets/slices_by_volume and assets/slices_noise_by_volume
 
 # Option A. Checkpoint trained with blind_ssim
 image-enhancement infer-ae -c output/ae/autoencoder.pt -v assets/slices_noise_by_volume/volume/slice_noisy_257.tif -u assets/slices_by_volume/volume/slice_257.tif -o output/ae/infer_holdout
@@ -194,6 +228,8 @@ python -m image_enhancement.main optimize-ga --help
 python -m image_enhancement.main infer-ga --help
 python -m image_enhancement.main optimize-pso --help
 python -m image_enhancement.main infer-pso --help
+python -m image_enhancement.main optimize-ga-patchwise --help
+python -m image_enhancement.main infer-ga-patchwise --help
 ```
 
 Preprocess subcommands each have their own options:
@@ -210,7 +246,9 @@ If the `image-enhancement` script is on your `PATH` (after `pip install -e .`), 
 ---
 ### `train-ae` outputs and metrics
 
-Training supports two objectives. `--loss-mode blind_ssim` minimizes pooled SSIM loss between $\hat{u}$ and $v$ (blind objective). `--loss-mode hybrid_ssim_mse` minimizes `alpha*(1-SSIM(û,u)) + beta*MSE(û,u)` and therefore requires clean references (`-u`, `--clean-dir` + `--noisy-dir`, or manifest entries with `clean`). Single-image mode (`-v` / `--noisy`): one row per epoch in `history.jsonl`. Multi-pair mode (`--manifest` or `--clean-dir` + `--noisy-dir`): each epoch performs one optimization step per training pair (order optionally shuffled with `--shuffle`); logged `loss` is the mean training loss over pairs; SSIM/PSNR/MSE columns are means over all pairs with clean references. Validation pairs (`--val-manifest`) add `val_*` columns. Outputs include `autoencoder.pt`, `stats/metrics.json`, and `images/denoised_sample.tif` (first manifest pair after training). For an unbiased test slice, exclude it from training (`--exclude-from-train`) and run `infer-ae`.
+Training uses the same objective families as in the introduction: (1) `blind_ssim` (pooled SSIM vs. $v$) and (2) `hybrid_ssim_mse` (vs.\ clean $u$ when available). The search is neither (A) evolutionary nor (B) patch-wise GA: it is gradient descent on a global convolutional autoencoder that maps $v \mapsto \hat{u}$ for the full image.
+
+`--loss-mode blind_ssim` minimizes pooled SSIM loss between $\hat{u}$ and $v$ (blind objective). `--loss-mode hybrid_ssim_mse` minimizes `alpha*(1-SSIM(û,u)) + beta*MSE(û,u)` and therefore requires clean references (`-u`, `--clean-dir` + `--noisy-dir`, or manifest entries with `clean`). Single-image mode (`-v` / `--noisy`): one row per epoch in `history.jsonl`. Multi-pair mode (`--manifest` or `--clean-dir` + `--noisy-dir`): each epoch performs one optimization step per training pair (order optionally shuffled with `--shuffle`); logged `loss` is the mean training loss over pairs; SSIM/PSNR/MSE columns are means over all pairs with clean references. Validation pairs (`--val-manifest`) add `val_*` columns. Outputs include `autoencoder.pt`, `stats/metrics.json`, and `images/denoised_sample.tif` (first manifest pair after training). For an unbiased test slice, exclude it from training (`--exclude-from-train`) and run `infer-ae`.
 
 When you pass `--clean` / `-u` (single mode) or use multi-pair mode with clean references, logs and `output/ae/stats/metrics.json` include full-reference evaluation (not part of the loss):
 
@@ -228,63 +266,81 @@ When you pass `--clean` / `-u` (single mode) or use multi-pair mode with clean r
 `metrics.json` also records `loss_mode`, `alpha`, `beta`, `window_size`, `lambda_residual`, `epsilon`, paths, `runtime_sec`, and `peak_rss_bytes`. In blind mode, PSNR is often enough as a classical scalar alongside SSIM; in hybrid experiments it is useful to inspect raw `mse_vs_clean` directly because it is part of the optimized objective.
 
 ---
-### `optimize-ga` / `infer-ga`
+### `optimize-ga` / `infer-ga`: (A) Global search geometry
 
-The first GA implementation is intentionally narrower than AE:
+This is the global GA: one evolutionary loop over a single whole-image chromosome (the image is stored as a sequence of small patches in one genome, but fitness is evaluated on the full reconstructed $\hat{u}$ vs. $v$ / $u$). It is intentionally narrower than AE:
 
-- it supports single-image denoising first
-- it uses a patchwise chromosome
-- it writes outputs under `output/ga/`
+- single-image denoising first
+- outputs under e.g.\ `output/ga/`
 
-GA optimization commands:
+Objective (1) blind vs. (2) hybrid (see table at the top):
 
 ```bash
-# Option A. Blind local-SSIM objective on one image
+# (A) Global GA, objective (1): blind pooled SSIM relative to v
 image-enhancement optimize-ga -v assets/slices_noise_vol/slice_noisy_257.tif -u assets/slices_vol/slice_257.tif -o output/ga --generations 40 --population-size 30 --patch-size 8 --loss-mode blind_ssim
 
-# Option B. Hybrid SSIM + MSE on one image
+# (A) Global GA, objective (2): hybrid SSIM+MSE relative to u (pass clean image with -u)
 image-enhancement optimize-ga -v assets/slices_noise_vol/slice_noisy_257.tif -u assets/slices_vol/slice_257.tif -o output/ga_hybrid --generations 40 --population-size 30 --patch-size 8 --loss-mode hybrid_ssim_mse --alpha 0.8 --beta 0.2
 ```
 
-Inference commands:
+Inference (rebuild $\hat{u}$ from `ga_solution.npz` and evaluate):
 
 ```bash
-# Option A. Reconstruct and evaluate the saved GA solution
+# (A) Global inference after a blind run
 image-enhancement infer-ga -c output/ga/ga_solution.npz -v assets/slices_noise_vol/slice_noisy_257.tif -u assets/slices_vol/slice_257.tif -o output/ga/infer_holdout
 
-# Option B. Reconstruct and evaluate the saved GA hybrid solution
+# (A) Global inference after a hybrid run
 image-enhancement infer-ga -c output/ga_hybrid/ga_solution.npz -v assets/slices_noise_vol/slice_noisy_257.tif -u assets/slices_vol/slice_257.tif -o output/ga_hybrid/infer_holdout
 ```
 
 GA metrics mirror the AE metrics as much as possible: `ssim_hat_vs_clean`, `ssim_hat_vs_noisy`, `ssim_clean_vs_noisy`, `mse_vs_clean`, `psnr_vs_clean`, `runtime_sec`, and `peak_rss_bytes`, plus GA-specific settings such as `patch_size`, population size, generations, crossover probability, and mutation probability.
 
 ---
-### `optimize-pso` / `infer-pso`
+### `optimize-ga-patchwise` / `infer-ga-patchwise`: (B) Patch-wise search geometry
 
-The PSO implementation mirrors the current GA scope:
+(B) Patch-wise search runs independent GA on each spatial tile (same objective per crop as above), then overlap blending with Hann, triangular, Tukey, or flat weights into a full $\hat{u}_{\mathrm{final}}$. Final reporting uses the fused image against full-image $v$ (and $u$ if provided). This complements (A) `optimize-ga`; it is not a replacement. Use both to compare global and patch-wise search under objectives (1) and (2). Typical output directory: `output/ga_patchwise/`.
 
-- it supports single-image denoising first
-- it uses the same patchwise image representation as GA
-- it reuses the shared `blind_ssim` and `hybrid_ssim_mse` objectives
-- it writes outputs under `output/pso/`
-
-PSO optimization commands:
+Objective (1) blind vs. (2) hybrid (same flags as global GA; `--patch-size` here is the tile side $B$, not the global GA patch genome tile):
 
 ```bash
-# Option A. Blind local-SSIM objective on one image
+# (B) Patch-wise GA, objective (1): blind per-tile fit to noisy crop; full-image metrics on fused û
+image-enhancement optimize-ga-patchwise -v assets/slices_noise_vol/slice_noisy_257.tif -u assets/slices_vol/slice_257.tif -o output/ga_patchwise \
+  --loss-mode blind_ssim --patch-size 64 --stride 32 --generations 30 --population 40
+
+# (B) Patch-wise GA, objective (2): hybrid (pass clean image with -u for aligned tile crops)
+image-enhancement optimize-ga-patchwise -v assets/slices_noise_vol/slice_noisy_257.tif -u assets/slices_vol/slice_257.tif -o output/ga_patchwise_hybrid \
+  --loss-mode hybrid_ssim_mse --alpha 0.8 --beta 0.2 --patch-size 64 --stride 32
+
+# (B) Patch-wise inference: reload fused û and recompute metrics
+image-enhancement infer-ga-patchwise -c output/ga_patchwise/ga_patchwise_solution.npz -v assets/slices_noise_vol/slice_noisy_257.tif -u assets/slices_vol/slice_257.tif -o output/ga_patchwise/infer_holdout
+```
+
+Artifacts: `ga_patchwise_solution.npz`, `stats/metrics.json`, `stats/history.jsonl`, `images/denoised.tif`.
+
+---
+### `optimize-pso` / `infer-pso`: (A) Global search geometry (same as `optimize-ga`)
+
+PSO mirrors global GA (`optimize-ga`): one swarm over a whole-image candidate, objectives (1) and (2) as above, not the (B) patch-wise tile-and-blend path.
+
+- single-image denoising first
+- same patch-tiled encoding of the full image as global GA
+- outputs under e.g.\ `output/pso/`
+
+```bash
+# (A) Global PSO, objective (1): blind
 image-enhancement optimize-pso -v assets/slices_noise_vol/slice_noisy_257.tif -u assets/slices_vol/slice_257.tif -o output/pso --iterations 60 --swarm-size 24 --patch-size 8 --loss-mode blind_ssim
 
-# Option B. Hybrid SSIM + MSE on one image
+# (A) Global PSO, objective (2): hybrid
 image-enhancement optimize-pso -v assets/slices_noise_vol/slice_noisy_257.tif -u assets/slices_vol/slice_257.tif -o output/pso_hybrid --iterations 60 --swarm-size 24 --patch-size 8 --loss-mode hybrid_ssim_mse --alpha 0.8 --beta 0.2
 ```
 
-Inference commands:
+Inference:
 
 ```bash
-# Option A. Reconstruct and evaluate the saved PSO solution
+# (A) Global PSO inference, blind checkpoint
 image-enhancement infer-pso -c output/pso/pso_solution.npz -v assets/slices_noise_vol/slice_noisy_257.tif -u assets/slices_vol/slice_257.tif -o output/pso/infer_holdout
 
-# Option B. Reconstruct and evaluate the saved PSO hybrid solution
+# (A) Global PSO inference, hybrid checkpoint
 image-enhancement infer-pso -c output/pso_hybrid/pso_solution.npz -v assets/slices_noise_vol/slice_noisy_257.tif -u assets/slices_vol/slice_257.tif -o output/pso_hybrid/infer_holdout
 ```
 
@@ -295,7 +351,8 @@ PSO metrics mirror GA and AE as closely as possible: `ssim_hat_vs_clean`, `ssim_
 - `src/image_enhancement/preprocessing/`: NIfTI export (slice ranges, optional glob), single-file and batch (`noisify-dir`) AWGN, resize
 - `src/image_enhancement/common/`: pooled SSIM loss, shared objectives, performance tracking, constraints
 - `src/image_enhancement/autoencoders/`: `model.py`, `training.py` (blind SSIM or hybrid SSIM+MSE)
-- `src/image_enhancement/genetic_algorithm/`: patchwise GA denoising (`ga_runner.py`, `optimize-ga`, `infer-ga`)
+- `src/image_enhancement/genetic_algorithm/`: global whole-image GA (`ga_runner.py`, `optimize-ga`, `infer-ga`)
+- `src/image_enhancement/ga_patchwise/`: local per-tile GA with overlap blending (`optimize-ga-patchwise`, `infer-ga-patchwise`)
 - `src/image_enhancement/particle_swarm_opt/`: patchwise PSO denoising (`pso_runner.py`, `optimize-pso`, `infer-pso`)
 
 Autoencoder checkpoints and logs are written under `output/ae/images/`, `output/ae/stats/` (`metrics.json`, `history.jsonl`), and `output/ae/autoencoder.pt`.
