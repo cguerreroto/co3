@@ -1,4 +1,4 @@
-"""CLI entry: preprocess, AE training, global GA, PSO, and patch-wise local GA with overlap blending."""
+"""CLI entry: preprocess, AE training, global GA, PSO, and patch-wise local GA/PSO with overlap blending."""
 
 from __future__ import annotations
 import argparse
@@ -6,6 +6,7 @@ import image_enhancement.autoencoders.training as train_mod
 import image_enhancement.genetic_algorithm.ga_runner as ga_mod
 import image_enhancement.particle_swarm_opt.pso_runner as pso_mod
 import image_enhancement.ga_patchwise.patchwise_runner as ga_pw_mod
+import image_enhancement.pso_patchwise.patchwise_pso_runner as pso_pw_mod
 from image_enhancement.preprocessing import nifti_to_tiff, noisify, noisify_dir, resize
 
 
@@ -29,6 +30,8 @@ def build_parser() -> argparse.ArgumentParser:
     pso_mod.add_infer_parser(sub)
     ga_pw_mod.add_optimize_ga_patchwise_parser(sub)
     ga_pw_mod.add_infer_ga_patchwise_parser(sub)
+    pso_pw_mod.add_optimize_pso_patchwise_parser(sub)
+    pso_pw_mod.add_infer_pso_patchwise_parser(sub)
     return parser
 
 
@@ -63,6 +66,10 @@ def main() -> None:
         ga_pw_mod.optimize_ga_patchwise_cli(args)
     elif args.command == "infer-ga-patchwise":
         ga_pw_mod.infer_ga_patchwise_cli(args)
+    elif args.command == "optimize-pso-patchwise":
+        pso_pw_mod.optimize_pso_patchwise_cli(args)
+    elif args.command == "infer-pso-patchwise":
+        pso_pw_mod.infer_pso_patchwise_cli(args)
     else:
         raise SystemExit(f"Unknown command: {args.command}")
 
