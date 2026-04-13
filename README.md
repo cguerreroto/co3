@@ -230,6 +230,8 @@ python -m image_enhancement.main optimize-pso --help
 python -m image_enhancement.main infer-pso --help
 python -m image_enhancement.main optimize-ga-patchwise --help
 python -m image_enhancement.main infer-ga-patchwise --help
+python -m image_enhancement.main optimize-pso-patchwise --help
+python -m image_enhancement.main infer-pso-patchwise --help
 ```
 
 Preprocess subcommands each have their own options:
@@ -346,6 +348,32 @@ image-enhancement infer-pso -c output/pso_hybrid/pso_solution.npz -v assets/slic
 
 PSO metrics mirror GA and AE as closely as possible: `ssim_hat_vs_clean`, `ssim_hat_vs_noisy`, `ssim_clean_vs_noisy`, `mse_vs_clean`, `psnr_vs_clean`, `runtime_sec`, and `peak_rss_bytes`, plus PSO-specific settings such as `patch_size`, swarm size, iterations, inertia, cognitive coefficient, social coefficient, initialization noise, and maximum velocity.
 
+---
+### `optimize-pso-patchwise` / `infer-pso-patchwise`: (B) Patch-wise search geometry (PSO)
+
+(B) Patch-wise PSO mirrors `optimize-ga-patchwise`: independent PSO swarm per spatial tile, then overlap blending with Hann (default), triangular, Tukey, or flat weights into a full $\hat{u}_{\mathrm{final}}$. Use `--blend` to switch blending methods and compare metrics across runs. Typical output directory: `output/pso_patchwise/`.
+
+Objective (1) blind vs. (2) hybrid (same flags as global PSO; `--patch-size` here is the tile side $B$; use `--blend` to change the blending method):
+
+```bash
+# (B) Patch-wise PSO, objective (1): blind, default Hann blending
+image-enhancement optimize-pso-patchwise -v assets/slice_noisy.tif -u assets/slice.tif -o output/pso_patchwise \
+  --loss-mode blind_ssim --patch-size 32 --stride 16 --swarm-size 20 --iterations 50
+
+# (B) Patch-wise PSO, objective (2): hybrid SSIM+MSE
+image-enhancement optimize-pso-patchwise -v assets/slice_noisy.tif -u assets/slice.tif -o output/pso_patchwise_hybrid \
+  --loss-mode hybrid_ssim_mse --alpha 0.8 --beta 0.2 --patch-size 32 --stride 16 --swarm-size 20 --iterations 50
+
+# (B) Patch-wise PSO with different blending modes: change --blend to compare hann / triangular / tukey
+image-enhancement optimize-pso-patchwise -v assets/slice_noisy.tif -u assets/slice.tif -o output/pso_patchwise_hann     --blend hann       --patch-size 32 --stride 16 --swarm-size 20 --iterations 50
+image-enhancement optimize-pso-patchwise -v assets/slice_noisy.tif -u assets/slice.tif -o output/pso_patchwise_tri      --blend triangular --patch-size 32 --stride 16 --swarm-size 20 --iterations 50
+image-enhancement optimize-pso-patchwise -v assets/slice_noisy.tif -u assets/slice.tif -o output/pso_patchwise_tukey    --blend tukey      --patch-size 32 --stride 16 --swarm-size 20 --iterations 50
+# (B) Patch-wise inference: reload fused û and recompute metrics
+image-enhancement infer-pso-patchwise -c output/pso_patchwise/pso_patchwise_solution.npz -v assets/slice_noisy.tif -u assets/slice.tif -o output/pso_patchwise/infer_holdout
+```
+
+Artifacts: `pso_patchwise_solution.npz`, `stats/metrics.json`, `stats/history.jsonl`, `images/denoised.tif`.
+
 ## Package layout
 
 - `src/image_enhancement/preprocessing/`: NIfTI export (slice ranges, optional glob), single-file and batch (`noisify-dir`) AWGN, resize
@@ -353,6 +381,7 @@ PSO metrics mirror GA and AE as closely as possible: `ssim_hat_vs_clean`, `ssim_
 - `src/image_enhancement/autoencoders/`: `model.py`, `training.py` (blind SSIM or hybrid SSIM+MSE)
 - `src/image_enhancement/genetic_algorithm/`: global whole-image GA (`ga_runner.py`, `optimize-ga`, `infer-ga`)
 - `src/image_enhancement/ga_patchwise/`: local per-tile GA with overlap blending (`optimize-ga-patchwise`, `infer-ga-patchwise`)
-- `src/image_enhancement/particle_swarm_opt/`: patchwise PSO denoising (`pso_runner.py`, `optimize-pso`, `infer-pso`)
+- `src/image_enhancement/particle_swarm_opt/`: global whole-image PSO (`pso_runner.py`, `optimize-pso`, `infer-pso`)
+- `src/image_enhancement/pso_patchwise/`: local per-tile PSO with overlap blending (`tile_pso.py`, `patchwise_pso_runner.py`, `optimize-pso-patchwise`, `infer-pso-patchwise`)
 
 Autoencoder checkpoints and logs are written under `output/ae/images/`, `output/ae/stats/` (`metrics.json`, `history.jsonl`), and `output/ae/autoencoder.pt`.
