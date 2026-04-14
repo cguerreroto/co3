@@ -134,7 +134,6 @@ def optimize_pso_patchwise(
                 "tile_iterations": len(hist),
             }
         )
-        print(f"tile {ti + 1}/{len(tiles)} (y={y}, x={x}) loss={best_loss:.6f}")
 
     u_hat, _num, _den = blending.blend_overlapping_patches(
         h,
