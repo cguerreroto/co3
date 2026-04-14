@@ -35,6 +35,13 @@ def run_tile_pso(
     Returns (best_u_hat, best_loss, history_rows) where best_u_hat has
     shape (patch, patch) and values in [0, 1].
     """
+    if patch <= 0:
+        raise ValueError("patch must be positive")
+    if swarm_size <= 0:
+        raise ValueError("swarm_size must be positive")
+    if iterations <= 0:
+        raise ValueError("iterations must be positive")
+
     rng = np.random.default_rng(seed)
 
     n = patch * patch

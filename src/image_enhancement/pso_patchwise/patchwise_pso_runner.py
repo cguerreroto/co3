@@ -73,6 +73,14 @@ def optimize_pso_patchwise(
             raise ValueError(f"u shape {u.shape} != v shape {v.shape}")
     if cfg.loss_mode == "hybrid_ssim_mse" and u is None:
         raise ValueError("hybrid_ssim_mse requires clean image -u")
+    if cfg.swarm_size <= 0:
+        raise ValueError("swarm_size must be positive")
+    if cfg.iterations <= 0:
+        raise ValueError("iterations must be positive")
+    if cfg.patch <= 0:
+        raise ValueError("patch must be positive")
+    if cfg.stride <= 0:
+        raise ValueError("stride must be positive")
     if cfg.patch < cfg.window_size:
         raise ValueError(f"patch ({cfg.patch}) must be >= SSIM window_size ({cfg.window_size})")
 
